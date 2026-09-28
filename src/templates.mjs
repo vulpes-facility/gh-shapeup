@@ -60,6 +60,35 @@ export function loadTemplate(kind, spec, text) {
   return { kind, spec, prefix: title, labels, ...parsed };
 }
 
+// A report template is its ## sections; without a template file, the config's headings are the template.
+export function loadReport(kind, spec, text) {
+  if (text === null) return { kind, spec, headings: [...spec.sections] };
+  const headings = parseBody(text).sections.map(section => section.heading);
+  for (const heading of spec.sections) {
+    if (!headings.includes(heading)) throw new ShapeUpError('template', `The report template ${spec.template} has no "## ${heading}" section.`);
+  }
+  return { kind, spec, headings };
+}
+
+const visible = text => text.replace(/<!--[\s\S]*?-->/g, '').trim() !== '';
+
+// A report has exactly the template's sections, in its order, each with more than guidance comments.
+// It is posted as given, so nothing is reordered or dropped.
+export function checkReport(template, text) {
+  const report = parseBody(text);
+  const listed = template.headings.map(heading => `## ${heading}`).join(', ');
+  if (visible(report.preamble)) throw new ShapeUpError('input', `The report must start with its first section, "## ${template.headings[0]}".`);
+  const headings = report.sections.map(section => section.heading);
+  const missing = template.headings.find(heading => !headings.includes(heading));
+  if (missing) throw new ShapeUpError('input', `The report has no "## ${missing}" section. It needs ${listed}.`);
+  if (headings.join('\n') !== template.headings.join('\n')) {
+    throw new ShapeUpError('input', `The report must have exactly these sections, in this order: ${listed}.`);
+  }
+  const empty = report.sections.find(section => !visible(section.content));
+  if (empty) throw new ShapeUpError('input', `The report's "## ${empty.heading}" section is empty. Write what applies, or that nothing does.`);
+  return text;
+}
+
 // Parameters that name a section fill it; a file given with --from supplies ## sections by heading.
 export function sectionValues(spec, options, fromText) {
   const values = new Map();

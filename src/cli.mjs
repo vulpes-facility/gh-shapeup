@@ -8,7 +8,7 @@ import { defaultConfigPath, loadConfig } from './config.mjs';
 import { ShapeUpError, requirePosition } from './domain.mjs';
 import { GitHub } from './github.mjs';
 import { Init } from './init.mjs';
-import { composeBody, editBody, footnoteValues, loadTemplate, sectionValues, titleFor } from './templates.mjs';
+import { checkReport, composeBody, editBody, footnoteValues, loadReport, loadTemplate, sectionValues, titleFor } from './templates.mjs';
 
 export const usage = `Usage: gh shapeup <kind> <command> [number] [--parameter value ...]
 
@@ -17,12 +17,12 @@ export const usage = `Usage: gh shapeup <kind> <command> [number] [--parameter v
   pitch bet <number> --cycle "<cycle title>" --reason …
   pitch unbet <number> --reason …
   pitch break <number> --reason …
-  pitch done <number> --reason …
+  pitch done <number> --report-file <file>
   scope new --pitch <number> --title T --done …
   scope edit <number> [--title T] [--done …] --reason …
   scope start <number> --reason …
   scope hill <number> --position 0-100 --reason …
-  scope done <number> --reason …
+  scope done <number> --report-file <file>
   cooldown new --title T --what … [--why …] --done …
   cooldown edit <number> [--title T] [section parameters] --reason …
   bug new --title T --symptom … --steps … --expected … [--environment …]
@@ -33,7 +33,9 @@ export const usage = `Usage: gh shapeup <kind> <command> [number] [--parameter v
 Section parameters come from the config's kinds; the ones above are the defaults.
 Every new and edit also takes --from <file> (Markdown split into ## sections) and repeated --footnote name=description.
 Every command with --reason makes its change and then posts the reason as a comment on the issue it changed.
---reason-file <file> gives the reason as a Markdown file instead, posted as it is.`;
+--reason-file <file> gives the reason as a Markdown file instead, posted as it is.
+pitch done and scope done post a completion report the same way, from --report-file <file>:
+exactly the ## sections of the report template, in order, none of them empty.`;
 
 const flags = new Set(['force']);
 
@@ -63,9 +65,11 @@ export function parseArgs(argv) {
 
 const need = (value, message) => { if (value === null || value === undefined || value === '') throw new ShapeUpError('input', message); return value; };
 
-// Every command that changes an existing issue leaves the reason on that issue as a comment.
+// Every command that changes an existing issue leaves a comment on it: a completion report when it finishes
+// a pitch or a scope, and the reason for the change otherwise.
+const needsReport = (kind, action) => action === 'done' && (kind === 'pitch' || kind === 'scope');
 const needsReason = (kind, action) => action === 'edit' ||
-  ({ pitch: ['bet', 'unbet', 'break', 'done'], scope: ['start', 'hill', 'done'] })[kind]?.includes(action) === true;
+  ({ pitch: ['bet', 'unbet', 'break'], scope: ['start', 'hill'] })[kind]?.includes(action) === true;
 
 export class Cli {
   constructor({ api, board, config, readTemplate, readText = path => readFile(path, 'utf8'), out = console.log }) {
@@ -117,6 +121,10 @@ export class Cli {
   close(number, reason) {
     return this.api.rest(`/issues/${number}`, { method: 'PATCH', body: { state: 'closed', state_reason: reason } });
   }
+  // A byte order mark is not part of the Markdown.
+  async readMarkdown(file, what) {
+    try { return (await this.readText(file)).replace(/^\uFEFF/, ''); } catch { throw new ShapeUpError('input', `Cannot read the ${what} file ${file}.`); }
+  }
   // Exactly one of --reason and --reason-file; the file's Markdown is posted as it is.
   async reason(options) {
     const { reason, 'reason-file': file } = options;
@@ -124,17 +132,35 @@ export class Cli {
     if (reason === undefined && file === undefined) {
       throw new ShapeUpError('input', '--reason or --reason-file is required: every change leaves its reason on the issue.');
     }
-    let text = reason?.trim();
-    if (file !== undefined) {
-      try { text = await this.readText(file); } catch { throw new ShapeUpError('input', `Cannot read the reason file ${file}.`); }
-    }
+    const text = file === undefined ? reason.trim() : await this.readMarkdown(file, 'reason');
     if (!text.trim()) throw new ShapeUpError('input', 'The reason is empty.');
     return text;
   }
+  // Without a template file in templateDir, the config's headings are the report template.
+  async reportTemplate(kind) {
+    const spec = this.config.reports[kind];
+    let text = null;
+    try { text = await this.readTemplate(spec.template); } catch (error) {
+      if (error.code !== 'ENOENT') throw new ShapeUpError('template', `Cannot read the report template ${spec.template}.`);
+    }
+    return loadReport(kind, spec, text);
+  }
+  // A completion report comes only from a file: its ## sections do not fit on one command line.
+  async report(kind, options) {
+    for (const other of ['reason', 'reason-file', 'report']) {
+      if (options[other] !== undefined) throw new ShapeUpError('input', `${kind} done takes a completion report from --report-file <file>, not --${other}.`);
+    }
+    const template = await this.reportTemplate(kind);
+    const file = options['report-file'];
+    if (file === undefined) {
+      throw new ShapeUpError('input', `--report-file is required: ${kind} done posts a completion report with ${template.headings.map(heading => `## ${heading}`).join(', ')}.`);
+    }
+    return checkReport(template, await this.readMarkdown(file, 'report'));
+  }
   // The comment follows the change, so a failed change leaves none. On a scope it also wakes the hill chart Action.
-  async explain(number, reason) {
-    try { await this.api.rest(`/issues/${number}/comments`, { method: 'POST', body: { body: reason } }); } catch (error) {
-      throw new ShapeUpError('comment', `#${number} was changed, but its reason comment failed: ${error.message} Post the reason on #${number} by hand.`);
+  async explain(number, note) {
+    try { await this.api.rest(`/issues/${number}/comments`, { method: 'POST', body: { body: note.text } }); } catch (error) {
+      throw new ShapeUpError('comment', `#${number} was changed, but its ${note.what} comment failed: ${error.message} Post the ${note.what} on #${number} by hand.`);
     }
   }
   async run(args) {
@@ -159,9 +185,10 @@ export class Cli {
       return findings;
     }
     if (!this.spec(kind)) throw new ShapeUpError('input', usage);
-    // The reason is checked before anything changes and posted only once the change is made.
-    const reason = needsReason(kind, action) ? await this.reason(args.options) : null;
-    const changed = async (number, message) => { await this.explain(number, reason); return done(message); };
+    // The reason or the report is checked before anything changes and posted only once the change is made.
+    const note = needsReport(kind, action) ? { what: 'report', text: await this.report(kind, args.options) }
+      : needsReason(kind, action) ? { what: 'reason', text: await this.reason(args.options) } : null;
+    const changed = async (number, message) => { await this.explain(number, note); return done(message); };
     if (action === 'new' && (kind === 'cooldown' || kind === 'bug')) {
       const issue = await this.create(kind, args);
       return done(`#${issue.number} ${issue.html_url}`);

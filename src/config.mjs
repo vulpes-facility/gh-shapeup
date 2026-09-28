@@ -13,6 +13,13 @@ export const defaultKinds = {
     required: ['symptom', 'steps', 'expected'] },
 };
 
+// The completion report that pitch done and scope done post is these ## sections, in order.
+// A template file of that name in templateDir, if there is one, is the template instead.
+export const defaultReports = {
+  pitch: { template: 'pitch-report.md', sections: ['Outcome', 'Scopes', 'Accepted limits', 'Follow-ups'] },
+  scope: { template: 'scope-report.md', sections: ['Outcome', 'Evidence', 'Follow-ups'] },
+};
+
 export const defaults = {
   statusField: 'Status',
   appetiteField: 'Appetite',
@@ -41,7 +48,8 @@ export function parseConfig(source) {
   const config = { ...defaults, ...raw,
     statuses: { ...defaults.statuses, ...raw.statuses },
     appetites: raw.appetites ?? defaults.appetites,
-    kinds: { ...defaultKinds, ...raw.kinds } };
+    kinds: { ...defaultKinds, ...raw.kinds },
+    reports: { ...defaultReports, ...raw.reports } };
   if (!text(config.projectOwner)) fail('projectOwner is required.');
   if (!['user', 'organization'].includes(config.projectOwnerType)) fail('projectOwnerType must be "user" or "organization".');
   if (!Number.isSafeInteger(config.projectNumber) || config.projectNumber < 1) fail('projectNumber must be a positive integer.');
@@ -61,6 +69,13 @@ export function parseConfig(source) {
     }
     spec.required ??= [];
     if (spec.required.some(param => !(param in spec.sections))) fail(`kinds.${kind}.required names a parameter that has no section.`);
+  }
+  for (const [kind, spec] of Object.entries(config.reports)) {
+    if (!(kind in defaultReports)) fail(`reports.${kind} is not a report: only pitch and scope have one.`);
+    if (!text(spec?.template) || !Array.isArray(spec.sections) || !spec.sections.length || !spec.sections.every(text)) {
+      fail(`reports.${kind} needs a template and a list of section headings.`);
+    }
+    if (new Set(spec.sections).size !== spec.sections.length) fail(`reports.${kind}.sections names a heading twice.`);
   }
   return config;
 }

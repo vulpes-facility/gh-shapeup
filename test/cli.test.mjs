@@ -11,12 +11,17 @@ import { ShapeUpError } from '../src/domain.mjs';
 
 const config = parseConfig(readFileSync('examples/shapeup.json', 'utf8'));
 const s = config.statuses;
+const reports = {
+  pitch: '## Outcome\n\nPlayers can pay.\n\n## Scopes\n\n- #11 merged\n- #12 merged\n\n## Accepted limits\n\nNo refunds yet.\n\n## Follow-ups\n\nNone.\n',
+  scope: '## Outcome\n\nMerged.\n\n## Evidence\n\n- Pull request #5, tests pass.\n\n## Follow-ups\n\nNone.\n',
+};
 const cycle = { title: 'Cycle 2', id: 'c2' };
 
 function fixture() {
   const calls = [];
   const issues = new Map();
   const files = new Map();
+  const templates = new Map();
   const failing = new Set();
   let next = 30;
   const boardIssue = (number, labels, item, extra = {}) => issues.set(number, { number, title: `T${number}`, body: '',
@@ -48,9 +53,10 @@ function fixture() {
     async issuesWith() { return [...issues.values()]; },
   };
   const out = [];
-  const cli = new Cli({ api, board, config, readTemplate: name => readFileSync(`examples/ISSUE_TEMPLATE/${name}`, 'utf8'),
+  const cli = new Cli({ api, board, config,
+    readTemplate: name => templates.get(name) ?? readFileSync(`examples/ISSUE_TEMPLATE/${name}`, 'utf8'),
     readText: async path => { if (!files.has(path)) throw new Error(`ENOENT ${path}`); return files.get(path); }, out: line => out.push(line) });
-  return { cli, board, calls, issues, files, failing, out, run: argv => cli.run(parseArgs(argv)) };
+  return { cli, board, calls, issues, files, templates, failing, out, run: argv => cli.run(parseArgs(argv)) };
 }
 
 test('arguments: kind, action, number, repeated footnotes, missing values', () => {
@@ -132,7 +138,8 @@ test('pitch break closes open scopes and the pitch as not planned and keeps the 
 });
 test('pitch done refuses while a scope is open', async () => {
   const f = fixture();
-  await assert.rejects(f.run(['pitch', 'done', '10', '--reason', 'Shipped.']), /#11, #12/);
+  f.files.set('report.md', reports.pitch);
+  await assert.rejects(f.run(['pitch', 'done', '10', '--report-file', 'report.md']), /#11, #12/);
 });
 test('pitch bet and unbet move the pitch and its open scopes together', async () => {
   const f = fixture();
@@ -158,19 +165,22 @@ test('edit refuses the wrong kind', async () => {
   await assert.rejects(f.run(['scope', 'edit', '10', '--done', 'x', '--reason', 'y']), { code: 'type' });
 });
 
-// Each command that changes an issue, the issue it comments on, and what makes it succeed in the fixture.
+// Each command that changes an issue with a reason, and the issue it comments on.
 const changes = [
   [['pitch', 'edit', '10', '--title', 'Renamed'], 10],
   [['pitch', 'bet', '10', '--cycle', 'Cycle 2'], 10],
   [['pitch', 'unbet', '10'], 10],
   [['pitch', 'break', '10'], 10],
-  [['pitch', 'done', '10'], 10, f => { f.issues.get(11).state = 'closed'; f.issues.get(12).state = 'closed'; }],
   [['scope', 'edit', '11', '--done', 'Merged'], 11],
   [['scope', 'start', '11'], 11],
   [['scope', 'hill', '11', '--position', '45'], 11],
-  [['scope', 'done', '11'], 11],
   [['cooldown', 'edit', '20', '--what', 'Tidy'], 20],
   [['bug', 'edit', '21', '--expected', 'It moves'], 21],
+];
+// Each command that finishes an issue with a report, the issue it comments on, and what lets it finish in the fixture.
+const finishes = [
+  [['pitch', 'done', '10'], 10, f => { f.issues.get(11).state = 'closed'; f.issues.get(12).state = 'closed'; }],
+  [['scope', 'done', '11'], 11, () => {}],
 ];
 const comments = f => f.calls.filter(c => c[0] === 'rest' && c[2].endsWith('/comments'));
 
@@ -210,10 +220,79 @@ test('--reason-file posts its Markdown as it is', async () => {
     assert.deepEqual(comments(f), [['rest', 'POST', `/issues/${number}/comments`, { body: report }]], name);
   }
 });
+test('pitch done and scope done need a report file that matches the default template, checked before anything changes', async () => {
+  const headings = { pitch: '## Outcome, ## Scopes, ## Accepted limits, ## Follow-ups', scope: '## Outcome, ## Evidence, ## Follow-ups' };
+  for (const [argv] of finishes) {
+    const kind = argv[0];
+    const f = fixture();
+    const rejects = (extra, message) => assert.rejects(f.run([...argv, ...extra]), { code: 'input', message }, `${kind} ${extra.join(' ')}`);
+    await rejects([], `--report-file is required: ${kind} done posts a completion report with ${headings[kind]}.`);
+    for (const other of ['reason', 'reason-file', 'report']) {
+      f.files.set('report.md', reports[kind]);
+      await rejects([`--${other}`, 'x', '--report-file', 'report.md'], `${kind} done takes a completion report from --report-file <file>, not --${other}.`);
+    }
+    await rejects(['--report-file', 'missing.md'], 'Cannot read the report file missing.md.');
+    const [first, ...rest] = reports[kind].split(/(?=^## )/m);
+    for (const [report, message] of [
+      ['', /^The report has no "## Outcome" section\. It needs /],
+      [rest.join(''), /^The report has no "## Outcome" section/],
+      [`# Report\n\n${reports[kind]}`, 'The report must start with its first section, "## Outcome".'],
+      [[...rest, first].join('\n'), /^The report must have exactly these sections, in this order: /],
+      [`${reports[kind]}\n## Notes\n\nMore.\n`, /^The report must have exactly these sections, in this order: /],
+      [`${first}\n${first}${rest.join('')}`, /^The report must have exactly these sections, in this order: /],
+      [reports[kind].replace('None.', ''), 'The report\'s "## Follow-ups" section is empty. Write what applies, or that nothing does.'],
+      [reports[kind].replace('None.', '<!-- What is left for later. -->'), 'The report\'s "## Follow-ups" section is empty. Write what applies, or that nothing does.'],
+    ]) {
+      f.files.set('report.md', report);
+      await rejects(['--report-file', 'report.md'], message);
+    }
+    assert.deepEqual(f.calls, [], kind);
+  }
+});
+test('a completion report is posted as given, after the change, on the issue it finishes', async () => {
+  for (const [argv, number, prepare] of finishes) {
+    const kind = argv[0];
+    for (const report of [reports[kind], `<!-- Written by hand. -->\r\n${reports[kind].replace(/\n/g, '\r\n')}`]) {
+      const f = fixture();
+      prepare(f);
+      f.files.set('report.md', `\uFEFF${report}`);
+      await f.run([...argv, '--report-file', 'report.md']);
+      assert.deepEqual(comments(f), [['rest', 'POST', `/issues/${number}/comments`, { body: report }]], kind);
+      assert.ok(f.calls.some(c => c[0] === 'status' && c[2] === 'done'), kind);
+      assert.deepEqual(f.calls.at(-1), comments(f)[0], kind);
+    }
+  }
+});
+test('a repository overrides the report template in its config or with a template file', async () => {
+  const f = fixture();
+  f.cli.config = { ...config, reports: { ...config.reports, scope: { template: 'scope-report.md', sections: ['Outcome', 'Verification'] } } };
+  f.files.set('default.md', reports.scope);
+  await assert.rejects(f.run(['scope', 'done', '11', '--report-file', 'default.md']), { code: 'input', message: /^The report has no "## Verification" section/ });
+  f.files.set('verified.md', '## Outcome\n\nMerged.\n\n## Verification\n\nThe smoke suite passed.\n');
+  await f.run(['scope', 'done', '11', '--report-file', 'verified.md']);
+  assert.deepEqual(comments(f).map(c => c[3].body), [f.files.get('verified.md')]);
+
+  const g = fixture();
+  finishes[0][2](g);
+  g.templates.set('pitch-report.md', '<!-- Fill in every section. -->\n\n## Outcome\n\n<!-- What shipped. -->\n\n## Scopes\n\n## Risks\n\n## Accepted limits\n\n## Follow-ups\n');
+  g.files.set('default.md', reports.pitch);
+  await assert.rejects(g.run(['pitch', 'done', '10', '--report-file', 'default.md']), { code: 'input', message: /^The report has no "## Risks" section/ });
+  g.files.set('risks.md', reports.pitch.replace('## Accepted limits', '## Risks\n\nThe provider may be slow.\n\n## Accepted limits'));
+  await g.run(['pitch', 'done', '10', '--report-file', 'risks.md']);
+  assert.deepEqual(comments(g).map(c => c[3].body), [g.files.get('risks.md')]);
+
+  const h = fixture();
+  h.templates.set('scope-report.md', '## Outcome\n\n## Follow-ups\n');
+  h.files.set('report.md', reports.scope);
+  await assert.rejects(h.run(['scope', 'done', '11', '--report-file', 'report.md']),
+    { code: 'template', message: 'The report template scope-report.md has no "## Evidence" section.' });
+  assert.deepEqual(h.calls, []);
+});
 test('a change that fails posts no comment', async () => {
   const f = fixture();
+  f.files.set('report.md', reports.pitch);
   await assert.rejects(f.run(['pitch', 'bet', '10', '--cycle', 'Cycle 9', '--reason', 'x']), /bad cycle/);
-  await assert.rejects(f.run(['pitch', 'done', '10', '--reason', 'x']), /#11, #12/);
+  await assert.rejects(f.run(['pitch', 'done', '10', '--report-file', 'report.md']), /#11, #12/);
   await assert.rejects(f.run(['scope', 'hill', '11', '--position', '101', '--reason', 'x']), { code: 'position' });
   await assert.rejects(f.run(['scope', 'edit', '10', '--done', 'x', '--reason', 'x']), { code: 'type' });
   f.failing.add('PATCH /issues/20');
@@ -229,6 +308,11 @@ test('a comment that fails after the change says so', async () => {
     code: 'comment', message: /^#11 was changed, but its reason comment failed: GitHub API request failed \(HTTP 500\)\. Post the reason on #11 by hand\.$/ });
   assert.deepEqual(f.calls.filter(c => c[0] === 'status'), [['status', 'I11', 'doing']]);
   assert.deepEqual(f.out, []);
+  f.failing.add('POST /issues/11/comments');
+  f.files.set('report.md', reports.scope);
+  await assert.rejects(f.run(['scope', 'done', '11', '--report-file', 'report.md']), {
+    code: 'comment', message: /^#11 was changed, but its report comment failed: .* Post the report on #11 by hand\.$/ });
+  assert.deepEqual(f.calls.filter(c => c[0] === 'status').at(-1), ['status', 'I11', 'done']);
 });
 
 const issue = (number, labels, item, extra = {}) => ({ number, labels, state: 'open', stateReason: null, parent: null, body: '', item, ...extra });
