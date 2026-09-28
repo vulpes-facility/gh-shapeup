@@ -37,6 +37,9 @@ export const defaults = {
   chartAlt: 'Hill chart',
 };
 
+// Parameters the CLI reads itself on new, edit and done, so no section can take their names.
+export const reserved = ['title', 'from', 'footnote', 'reason', 'reason-file', 'report', 'report-file'];
+
 const fail = message => { throw new ShapeUpError('config', message); };
 const text = value => typeof value === 'string' && value.trim() !== '';
 
@@ -66,6 +69,7 @@ export function parseConfig(source) {
     if (!text(spec?.template) || !spec.sections || typeof spec.sections !== 'object') fail(`kinds.${kind} needs a template and sections.`);
     for (const [param, heading] of Object.entries(spec.sections)) {
       if (!/^[a-z][a-z0-9-]*$/.test(param) || !text(heading)) fail(`kinds.${kind}.sections.${param} is not a valid parameter and heading.`);
+      if (reserved.includes(param)) fail(`kinds.${kind}.sections.${param} cannot name a section: --${param} is a parameter of the CLI itself.`);
     }
     spec.required ??= [];
     if (spec.required.some(param => !(param in spec.sections))) fail(`kinds.${kind}.required names a parameter that has no section.`);

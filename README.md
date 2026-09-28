@@ -68,6 +68,7 @@ gh shapeup init [--force]
 ```
 
 - Section parameters are set per kind in the config's `kinds`; the ones above are the defaults.
+  `title`, `from`, `footnote`, `reason`, `reason-file`, `report` and `report-file` are the CLI's own and cannot name a section.
 - Every `new` and `edit` also takes `--from <file>` (Markdown split into `## ` sections) and repeated `--footnote name=description`.
 - Every command that changes an existing issue leaves a comment on it.
   `pitch done` and `scope done` need a [completion report](#completion-reports) from `--report-file <file>`.

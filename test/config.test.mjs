@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { defaults, defaultKinds, defaultReports, parseConfig } from '../src/config.mjs';
+import { defaults, defaultKinds, defaultReports, parseConfig, reserved } from '../src/config.mjs';
 
 const minimal = { projectOwner: 'octocat', projectOwnerType: 'user', projectNumber: 1 };
 const parse = value => parseConfig(JSON.stringify(value));
@@ -49,6 +49,14 @@ test('invalid configs are named, not guessed', () => {
   ]) assert.throws(() => parse(bad), { code: 'config' }, JSON.stringify(bad));
   assert.throws(() => parseConfig('{'), { code: 'config' });
 });
+test('a section cannot take the name of a parameter the CLI reads itself', () => {
+  assert.deepEqual(reserved, ['title', 'from', 'footnote', 'reason', 'reason-file', 'report', 'report-file']);
+  for (const param of reserved) {
+    assert.throws(() => parse({ ...minimal, kinds: { bug: { template: 'b.md', sections: { [param]: 'Heading' } } } }),
+      { code: 'config', message: `kinds.bug.sections.${param} cannot name a section: --${param} is a parameter of the CLI itself.` });
+  }
+  assert.equal(parse({ ...minimal, kinds: { bug: { template: 'b.md', sections: { reasons: 'Reasons' } } } }).kinds.bug.sections.reasons, 'Reasons');
+});
 test('the schema lists every key the loader knows', () => {
   const schema = JSON.parse(readFileSync('config.schema.json', 'utf8'));
   for (const key of [...Object.keys(defaults), 'projectOwner', 'projectOwnerType', 'projectNumber', 'kinds', 'reports']) {
@@ -56,4 +64,5 @@ test('the schema lists every key the loader knows', () => {
   }
   assert.deepEqual(Object.keys(schema.properties.statuses.properties), Object.keys(defaults.statuses));
   assert.deepEqual(Object.keys(schema.properties.reports.properties), Object.keys(defaultReports));
+  assert.deepEqual(schema.$defs.kind.properties.sections.propertyNames.not.enum, reserved);
 });

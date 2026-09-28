@@ -104,9 +104,9 @@
       "properties": {
         "template": { "description": "File name of the issue template inside templateDir.", "type": "string", "minLength": 1 },
         "sections": {
-          "description": "Maps a CLI parameter (lower-case, hyphenated) to the ## heading it fills.",
+          "description": "Maps a CLI parameter (lower-case, hyphenated) to the ## heading it fills. The CLI's own parameters title, from, footnote, reason, reason-file, report and report-file cannot name a section.",
           "type": "object",
-          "propertyNames": { "pattern": "^[a-z][a-z0-9-]*$" },
+          "propertyNames": { "pattern": "^[a-z][a-z0-9-]*$", "not": { "enum": ["title", "from", "footnote", "reason", "reason-file", "report", "report-file"] } },
           "additionalProperties": { "type": "string", "minLength": 1 }
         },
         "required": {
