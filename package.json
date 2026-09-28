@@ -1,6 +1,6 @@
 {
   "name": "gh-shapeup",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Run Shape Up on GitHub Issues and Projects: a CLI for pitches, scopes, cooldowns and bugs, and an Action that draws each pitch's hill chart.",
   "license": "MIT",
   "type": "module",
