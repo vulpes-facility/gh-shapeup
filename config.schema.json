@@ -85,6 +85,15 @@
         "cooldown": { "$ref": "#/$defs/kind" },
         "bug": { "$ref": "#/$defs/kind" }
       }
+    },
+    "reports": {
+      "description": "For pitch done and scope done, the completion report's template file and its ## section headings, in order. The defaults are Outcome, Scopes, Accepted limits and Follow-ups for a pitch, and Outcome, Evidence and Follow-ups for a scope, with the templates at .github/shapeup/pitch-report.md and .github/shapeup/scope-report.md. Reports left out keep their defaults.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pitch": { "$ref": "#/$defs/report" },
+        "scope": { "$ref": "#/$defs/report" }
+      }
     }
   },
   "$defs": {
@@ -95,14 +104,26 @@
       "properties": {
         "template": { "description": "File name of the issue template inside templateDir.", "type": "string", "minLength": 1 },
         "sections": {
-          "description": "Maps a CLI parameter (lower-case, hyphenated) to the ## heading it fills.",
+          "description": "Maps a CLI parameter (lower-case, hyphenated) to the ## heading it fills. The CLI's own parameters title, from, footnote, reason, reason-file, report, report-file, appetite, pitch, cycle, position and force cannot name a section.",
           "type": "object",
-          "propertyNames": { "pattern": "^[a-z][a-z0-9-]*$" },
+          "propertyNames": { "pattern": "^[a-z][a-z0-9-]*$", "not": { "enum": ["title", "from", "footnote", "reason", "reason-file", "report", "report-file", "appetite", "pitch", "cycle", "position", "force"] } },
           "additionalProperties": { "type": "string", "minLength": 1 }
         },
         "required": {
           "description": "Parameters that must be given when an issue of this kind is created.",
           "type": "array", "items": { "type": "string" }
+        }
+      }
+    },
+    "report": {
+      "type": "object",
+      "required": ["template", "sections"],
+      "additionalProperties": false,
+      "properties": {
+        "template": { "description": "Path of the report template, relative to the repository root, such as .github/shapeup/scope-report.md. If the file exists, its ## sections are the report's and must include every heading in sections.", "type": "string", "minLength": 1 },
+        "sections": {
+          "description": "The ## headings a report must have, in order, each with content.",
+          "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 }
         }
       }
     }

@@ -13,6 +13,14 @@ export const defaultKinds = {
     required: ['symptom', 'steps', 'expected'] },
 };
 
+// The completion report that pitch done and scope done post is these ## sections, in order.
+// A file at the template path, relative to the repository root, is the template instead if it exists.
+// Report templates sit next to the config, not among the issue templates.
+export const defaultReports = {
+  pitch: { template: '.github/shapeup/pitch-report.md', sections: ['Outcome', 'Scopes', 'Accepted limits', 'Follow-ups'] },
+  scope: { template: '.github/shapeup/scope-report.md', sections: ['Outcome', 'Evidence', 'Follow-ups'] },
+};
+
 export const defaults = {
   statusField: 'Status',
   appetiteField: 'Appetite',
@@ -30,6 +38,9 @@ export const defaults = {
   chartAlt: 'Hill chart',
 };
 
+// Parameters the CLI reads itself on any command, so no section can take their names.
+export const reserved = ['title', 'from', 'footnote', 'reason', 'reason-file', 'report', 'report-file', 'appetite', 'pitch', 'cycle', 'position', 'force'];
+
 const fail = message => { throw new ShapeUpError('config', message); };
 const text = value => typeof value === 'string' && value.trim() !== '';
 
@@ -41,7 +52,8 @@ export function parseConfig(source) {
   const config = { ...defaults, ...raw,
     statuses: { ...defaults.statuses, ...raw.statuses },
     appetites: raw.appetites ?? defaults.appetites,
-    kinds: { ...defaultKinds, ...raw.kinds } };
+    kinds: { ...defaultKinds, ...raw.kinds },
+    reports: { ...defaultReports, ...raw.reports } };
   if (!text(config.projectOwner)) fail('projectOwner is required.');
   if (!['user', 'organization'].includes(config.projectOwnerType)) fail('projectOwnerType must be "user" or "organization".');
   if (!Number.isSafeInteger(config.projectNumber) || config.projectNumber < 1) fail('projectNumber must be a positive integer.');
@@ -58,9 +70,17 @@ export function parseConfig(source) {
     if (!text(spec?.template) || !spec.sections || typeof spec.sections !== 'object') fail(`kinds.${kind} needs a template and sections.`);
     for (const [param, heading] of Object.entries(spec.sections)) {
       if (!/^[a-z][a-z0-9-]*$/.test(param) || !text(heading)) fail(`kinds.${kind}.sections.${param} is not a valid parameter and heading.`);
+      if (reserved.includes(param)) fail(`kinds.${kind}.sections.${param} cannot name a section: --${param} is a parameter of the CLI itself.`);
     }
     spec.required ??= [];
     if (spec.required.some(param => !(param in spec.sections))) fail(`kinds.${kind}.required names a parameter that has no section.`);
+  }
+  for (const [kind, spec] of Object.entries(config.reports)) {
+    if (!(kind in defaultReports)) fail(`reports.${kind} is not a report: only pitch and scope have one.`);
+    if (!text(spec?.template) || !Array.isArray(spec.sections) || !spec.sections.length || !spec.sections.every(text)) {
+      fail(`reports.${kind} needs a template and a list of section headings.`);
+    }
+    if (new Set(spec.sections).size !== spec.sections.length) fail(`reports.${kind}.sections names a heading twice.`);
   }
   return config;
 }
