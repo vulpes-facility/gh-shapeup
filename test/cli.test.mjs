@@ -36,20 +36,29 @@ function fixture() {
     async rest(path, options = {}) {
       if (failing.has(`${options.method ?? 'GET'} ${path}`)) throw new ShapeUpError('api', 'GitHub API request failed (HTTP 500).');
       calls.push(['rest', options.method ?? 'GET', path, options.body]);
+      const closing = issues.get(Number(path.split('/')[2]));
+      if (options.method === 'PATCH' && options.body?.state === 'closed' && closing) Object.assign(closing, { state: 'closed', stateReason: options.body.state_reason });
       if (path === '/issues' && options.method === 'POST') { const number = next++; return { number, id: number * 10, node_id: `N${number}`, html_url: `https://x/${number}` }; }
       return {};
     },
     async children(number) { return [...issues.values()].filter(i => i.parent === number).map(i => ({ number: i.number, labels: i.labels.map(name => ({ name })) })); },
   };
+  // Board changes are recorded, applied to the issues and can be made to fail, as in failing.add('cycle I11').
+  const change = (kind, item, value, apply) => {
+    if (failing.has(`${kind} ${item}`)) throw new ShapeUpError('graphql', 'A GitHub Project GraphQL request failed.');
+    calls.push([kind, item, value]);
+    const issue = [...issues.values()].find(i => i.item?.id === item);
+    if (issue) apply(issue.item);
+  };
   const board = {
     async load() { calls.push(['load']); },
     async issue(number) { const issue = issues.get(number); if (!issue) throw new Error(`no ${number}`); return structuredClone(issue); },
-    async add(node) { calls.push(['add', node]); return `item-${node}`; },
-    async setStatus(item, key) { calls.push(['status', item, key]); },
-    async setAppetite(item, value) { calls.push(['appetite', item, value]); },
-    async setCycle(item, id) { calls.push(['cycle', item, id]); },
-    async setHill(item, value) { calls.push(['hill', item, value]); },
-    async clear(item, field) { calls.push(['clear', item, field]); },
+    async add(node) { change('add', node, undefined, () => {}); calls.at(-1).pop(); return `item-${node}`; },
+    async setStatus(item, key) { change('status', item, key, i => { i.status = s[key]; }); },
+    async setAppetite(item, value) { change('appetite', item, value, i => { i.appetite = config.appetites[value]; }); },
+    async setCycle(item, id) { change('cycle', item, id, i => { i.cycle = { ...cycle, id }; }); },
+    async setHill(item, value) { change('hill', item, value, i => { i.hill = value; }); },
+    async clear(item, field) { change('clear', item, field, i => { i[field] = null; }); },
     iteration(title) { if (title !== 'Cycle 2') throw new Error('bad cycle'); return 'c2'; },
     option(field, name) {
       if (![...Object.values(s), ...Object.values(config.appetites)].includes(name)) throw new ShapeUpError('field', `The field has no option named "${name}".`);
@@ -151,16 +160,27 @@ test('pitch done refuses while a scope is open', async () => {
   f.files.set('report.md', reports.pitch);
   await assert.rejects(f.run(['pitch', 'done', '10', '--report-file', 'report.md']), /#11, #12/);
 });
-test('pitch bet and unbet move the pitch and its open scopes together', async () => {
+const finishedScope = (f, extra) => f.issues.set(13, { number: 13, title: 'T13', body: '', state: 'closed', stateReason: 'completed',
+  labels: ['scope'], parent: 10, item: { id: 'I13', status: s.done, cycle: null, hill: 100 }, ...extra });
+test('pitch bet and unbet move the pitch and its unfinished scopes together, changing only what differs', async () => {
   const f = fixture();
+  for (const number of [10, 11, 12]) f.issues.get(number).item.cycle = null;
   f.issues.get(10).item.status = s.shaped;
   f.issues.get(11).item.status = s.shaped;
+  finishedScope(f);
   await f.run(['pitch', 'bet', '10', '--cycle', 'Cycle 2', '--reason', 'Bet at the table.']);
   assert.deepEqual(f.calls.filter(c => ['status', 'cycle'].includes(c[0])),
-    [['status', 'I10', 'bet'], ['cycle', 'I10', 'c2'], ['cycle', 'I11', 'c2'], ['status', 'I11', 'bet'], ['cycle', 'I12', 'c2']]);
+    [['cycle', 'I10', 'c2'], ['status', 'I10', 'bet'], ['cycle', 'I11', 'c2'], ['status', 'I11', 'bet'], ['cycle', 'I12', 'c2']]);
   const g = fixture();
+  finishedScope(g);
   await g.run(['pitch', 'unbet', '10', '--reason', 'Not this cycle.']);
-  assert.deepEqual(g.calls.filter(c => c[0] === 'clear').map(c => c[1]), ['I10', 'I11', 'I12']);
+  assert.deepEqual(g.calls.filter(c => ['status', 'clear'].includes(c[0])), [['status', 'I10', 'shaped'], ['clear', 'I10', 'cycle'],
+    ['status', 'I11', 'shaped'], ['clear', 'I11', 'cycle'], ['status', 'I12', 'shaped'], ['clear', 'I12', 'cycle']]);
+  const h = fixture();
+  h.issues.get(10).item.status = s.doing;
+  h.issues.get(10).item.cycle = null;
+  await h.run(['pitch', 'bet', '10', '--cycle', 'Cycle 2', '--reason', 'Moved.']);
+  assert.deepEqual(h.calls.filter(c => ['status', 'cycle'].includes(c[0])), [['cycle', 'I10', 'c2']]);
 });
 test('cooldown and bug are created from their templates without touching the board', async () => {
   const f = fixture();
@@ -178,7 +198,7 @@ test('edit refuses the wrong kind', async () => {
 // Each command that changes an issue with a reason, and the issue it comments on.
 const changes = [
   [['pitch', 'edit', '10', '--title', 'Renamed'], 10],
-  [['pitch', 'bet', '10', '--cycle', 'Cycle 2'], 10],
+  [['pitch', 'bet', '10', '--cycle', 'Cycle 2'], 10, f => { f.issues.get(10).item.status = s.shaped; }],
   [['pitch', 'unbet', '10'], 10],
   [['pitch', 'break', '10'], 10],
   [['scope', 'edit', '11', '--done', 'Merged'], 11],
@@ -374,6 +394,148 @@ test('every command refuses an option it does not read, before any call', async 
   await assert.rejects(f.run(['scope', 'hill', '11', '--position', '5', '--reason', 'x', '--footnote', 'a=b']), { message: /^scope hill does not take --footnote\./ });
   await assert.rejects(f.run(['audit', '--pich', '10']), { message: 'audit does not take --pich. It takes --pitch.' });
   assert.deepEqual(f.calls, []);
+});
+const scopeReport = f => { f.files.set('report.md', reports.scope); return ['--report-file', 'report.md']; };
+const pitchReport = f => { f.files.set('report.md', reports.pitch); return ['--report-file', 'report.md']; };
+const closeScopes = f => { for (const n of [11, 12]) Object.assign(f.issues.get(n), { state: 'closed', stateReason: 'completed' }); };
+const hint = 'Work that follows a finished scope is a new scope: gh shapeup scope new --pitch 10 --title … --done ….';
+test('a state command whose result already holds, or that would reopen a finished scope, refuses before any change and without a comment', async () => {
+  const closed = (n, reason, status) => f => Object.assign(f.issues.get(n), { state: 'closed', stateReason: reason }, status ? { item: { ...f.issues.get(n).item, status } } : {});
+  const status = (n, value, more = {}) => f => Object.assign(f.issues.get(n).item, { status: value, ...more });
+  for (const [prepare, argv, message] of [
+    [closed(11, 'completed', s.done), f => ['scope', 'done', '11', ...scopeReport(f)], '#11 is already done: closed as completed and Done.'],
+    [closed(11, 'not_planned', s.dropped), f => ['scope', 'done', '11', ...scopeReport(f)], `#11 was dropped (closed as not planned); a dropped scope is not done. ${hint}`],
+    [status(11, s.dropped), f => ['scope', 'done', '11', ...scopeReport(f)], `#11 was dropped (Dropped); a dropped scope is not done. ${hint}`],
+    [() => {}, () => ['scope', 'start', '12', '--reason', 'x'], '#12 is already In progress.'],
+    [closed(11, 'completed', s.done), () => ['scope', 'start', '11', '--reason', 'x'], `#11 is finished (closed as completed) and is not started again. ${hint}`],
+    [status(11, s.done), () => ['scope', 'start', '11', '--reason', 'x'], `#11 is finished (Done) and is not started again. ${hint}`],
+    [status(11, s.dropped), () => ['scope', 'start', '11', '--reason', 'x'], `#11 is finished (Dropped) and is not started again. ${hint}`],
+    [closed(11, 'not_planned'), () => ['scope', 'start', '11', '--reason', 'x'], `#11 is finished (closed as not planned) and is not started again. ${hint}`],
+    [() => {}, () => ['scope', 'hill', '11', '--position', '30', '--reason', 'x'], '#11 is already at 30 on the hill.'],
+    [() => {}, () => ['scope', 'hill', '12', '--position', '0', '--reason', 'x'], '#12 is already at 0 on the hill.'],
+    [closed(11, 'completed', s.done), () => ['scope', 'hill', '11', '--position', '90', '--reason', 'x'], `#11 is done (closed as completed), so it moves only to 100 on the hill. ${hint}`],
+    [status(11, s.done), () => ['scope', 'hill', '11', '--position', '0', '--reason', 'x'], `#11 is done (Done), so it moves only to 100 on the hill. ${hint}`],
+    [f => { closed(11, 'completed', s.done)(f); f.issues.get(11).item.hill = 100; }, () => ['scope', 'hill', '11', '--position', '100', '--reason', 'x'], '#11 is already at 100 on the hill.'],
+    [closed(11, 'not_planned', s.dropped), () => ['scope', 'hill', '11', '--position', '100', '--reason', 'x'], `#11 was dropped (closed as not planned), so its hill position stays. ${hint}`],
+    [status(11, s.dropped), () => ['scope', 'hill', '11', '--position', '50', '--reason', 'x'], `#11 was dropped (Dropped), so its hill position stays. ${hint}`],
+    [f => { closed(10, 'completed', s.done)(f); closeScopes(f); }, f => ['pitch', 'done', '10', ...pitchReport(f)], '#10 is already done: closed as completed and Done.'],
+    [closed(10, 'not_planned', s.dropped), f => ['pitch', 'done', '10', ...pitchReport(f)], '#10 was dropped (closed as not planned); a dropped pitch is not done.'],
+    [f => { for (const n of [10, 11, 12]) status(n, s.shaped, { cycle: null })(f); }, () => ['pitch', 'unbet', '10', '--reason', 'x'], '#10 and its scopes are already Shaped with no Cycle.'],
+    [closed(10, 'completed', s.done), () => ['pitch', 'unbet', '10', '--reason', 'x'], '#10 is finished (closed as completed); a finished pitch is not unbet.'],
+    [() => {}, () => ['pitch', 'bet', '10', '--cycle', 'Cycle 2', '--reason', 'x'], '#10 is already bet on Cycle 2.'],
+    [status(10, s.dropped), () => ['pitch', 'bet', '10', '--cycle', 'Cycle 2', '--reason', 'x'], '#10 is finished (Dropped); a finished pitch is not bet again.'],
+    [status(10, s.done), () => ['pitch', 'break', '10', '--reason', 'x'], '#10 is done (Done); the circuit breaker stops only a pitch that is not finished.'],
+    [closed(10, 'completed'), () => ['pitch', 'break', '10', '--reason', 'x'], '#10 is done (closed as completed); the circuit breaker stops only a pitch that is not finished.'],
+    [f => { closed(10, 'not_planned', s.dropped)(f); closed(11, 'not_planned', s.dropped)(f); closed(12, 'not_planned', s.dropped)(f); },
+      () => ['pitch', 'break', '10', '--reason', 'x'], '#10 is already closed by the circuit breaker.'],
+    [status(10, s.shaped), () => ['pitch', 'edit', '10', '--appetite', '1', '--reason', 'x'], '#10 already has Appetite 1 cycle.'],
+    [closed(10, 'completed', s.done), () => ['scope', 'new', '--pitch', '10', '--title', 'T', '--done', 'd'], '#10 is finished (closed as completed); a new scope needs a pitch that is not finished.'],
+    [status(10, s.done), () => ['scope', 'new', '--pitch', '10', '--title', 'T', '--done', 'd'], '#10 is finished (Done); a new scope needs a pitch that is not finished.'],
+    [status(10, s.dropped), () => ['scope', 'new', '--pitch', '10', '--title', 'T', '--done', 'd'], '#10 is finished (Dropped); a new scope needs a pitch that is not finished.'],
+    [closed(11, 'duplicate'), f => ['scope', 'done', '11', ...scopeReport(f)], `#11 was dropped (closed as duplicate); a dropped scope is not done. ${hint}`],
+  ]) {
+    const f = fixture();
+    prepare(f);
+    const args = argv(f);
+    await assert.rejects(f.run(args), { code: 'input', message }, args.join(' '));
+    assert.deepEqual(f.calls.filter(c => c[0] !== 'load'), [], args.join(' '));
+  }
+});
+test('a done scope that did not reach the top of the hill can still be moved to 100', async () => {
+  for (const prepare of [f => Object.assign(f.issues.get(11), { state: 'closed', stateReason: 'completed' }), f => { f.issues.get(11).item.status = s.done; }]) {
+    const f = fixture();
+    prepare(f);
+    await f.run(['scope', 'hill', '11', '--position', '100', '--reason', 'Finished without reaching the top.']);
+    assert.deepEqual(f.calls.filter(c => c[0] !== 'load').map(c => c.slice(0, 3)), [['hill', 'I11', 100], ['rest', 'POST', '/issues/11/comments']]);
+    assert.match(f.out.at(-1), /30 → 100/);
+  }
+});
+test('a finished scope keeps its state when its pitch is bet, unbet or broken, and only unfinished scopes follow', async () => {
+  const f = fixture();
+  finishedScope(f);
+  await f.run(['pitch', 'break', '10', '--reason', 'Out of time.']);
+  assert.ok(!f.calls.some(c => c[1] === 'I13' || c[2] === '/issues/13'));
+  assert.deepEqual(f.issues.get(13).item.status, s.done);
+  // A scope closed as not planned whose status was left behind is set to Dropped with the rest.
+  const g = fixture();
+  finishedScope(g, { stateReason: 'not_planned', item: { id: 'I13', status: s.doing, cycle: null, hill: 10 } });
+  await g.run(['pitch', 'break', '10', '--reason', 'Out of time.']);
+  assert.deepEqual(g.calls.filter(c => c[1] === 'I13'), [['status', 'I13', 'dropped']]);
+});
+const partial = (command, made, failed, rest, finish, again = 'it makes only the changes still missing') => [
+  `${command} stopped after ${made.length} of ${made.length + 1 + rest.length} changes. Nothing was rolled back${finish === 'new' ? '' : `, and the ${finish} was not posted`}.`,
+  'Made:', ...made.map(line => `- ${line}`), 'Failed:', `- ${failed}`, ...(rest.length ? ['Not attempted:', ...rest.map(line => `- ${line}`)] : []),
+  ...(finish === 'new' ? ['To finish, make the failed and remaining changes by hand. Running the command again would create another issue.']
+    : [`To finish, run the same command again: ${again} and then posts the ${finish}. Or make them by hand and post the ${finish} yourself.`,
+      `If running it again says the result already holds, post the ${finish} by hand.`]),
+].join('\n');
+const graphqlFailed = 'A GitHub Project GraphQL request failed.';
+const apiFailed = 'GitHub API request failed (HTTP 500).';
+test('a command that fails after its first change reports what was made and what is left, posts nothing, and a second run finishes it', async () => {
+  for (const [name, prepare, fail, argv, message, finished] of [
+    ['pitch bet', f => { for (const n of [10, 11, 12]) f.issues.get(n).item.cycle = null; f.issues.get(10).item.status = s.shaped; f.issues.get(11).item.status = s.shaped; },
+      'cycle I11', () => ['pitch', 'bet', '10', '--cycle', 'Cycle 2', '--reason', 'Bet.'],
+      partial('pitch bet #10', ['set Cycle of #10 to Cycle 2', 'set Status of #10 to Bet'], `set Cycle of #11 to Cycle 2: ${graphqlFailed}`,
+        ['set Status of #11 to Bet', 'set Cycle of #12 to Cycle 2'], 'reason'),
+      f => [11, 12].every(n => f.issues.get(n).item.cycle?.id === 'c2') && f.issues.get(11).item.status === s.bet],
+    ['pitch unbet', () => {}, 'clear I11', () => ['pitch', 'unbet', '10', '--reason', 'Not now.'],
+      partial('pitch unbet #10', ['set Status of #10 to Shaped', 'clear Cycle of #10', 'set Status of #11 to Shaped'], `clear Cycle of #11: ${graphqlFailed}`,
+        ['set Status of #12 to Shaped', 'clear Cycle of #12'], 'reason'),
+      f => [10, 11, 12].every(n => f.issues.get(n).item.status === s.shaped && !f.issues.get(n).item.cycle)],
+    ['pitch break', () => {}, 'PATCH /issues/12', () => ['pitch', 'break', '10', '--reason', 'Out of time.'],
+      partial('pitch break #10', ['close #11 as not planned', 'set Status of #11 to Dropped'], `close #12 as not planned: ${apiFailed}`,
+        ['set Status of #12 to Dropped', 'close #10 as not planned', 'set Status of #10 to Dropped'], 'reason'),
+      f => [10, 11, 12].every(n => f.issues.get(n).state === 'closed' && f.issues.get(n).item.status === s.dropped)],
+    ['pitch done', closeScopes, 'status I10', f => ['pitch', 'done', '10', ...pitchReport(f)],
+      partial('pitch done #10', ['close #10 as completed'], `set Status of #10 to Done: ${graphqlFailed}`, [], 'report'),
+      f => f.issues.get(10).state === 'closed' && f.issues.get(10).item.status === s.done],
+    ['scope done', () => {}, 'status I11', f => ['scope', 'done', '11', ...scopeReport(f)],
+      partial('scope done #11', ['close #11 as completed'], `set Status of #11 to Done: ${graphqlFailed}`, [], 'report'),
+      f => f.issues.get(11).state === 'closed' && f.issues.get(11).item.status === s.done],
+    ['pitch edit --appetite', f => { f.issues.get(10).item.status = s.shaped; }, 'appetite I10', () => ['pitch', 'edit', '10', '--title', 'Smaller', '--appetite', '2', '--reason', 'Smaller.'],
+      partial('pitch edit #10', ['edit the title and body of #10'], `set Appetite of #10 to 2 cycles: ${graphqlFailed}`, [], 'reason',
+        'it sends the same edit again, makes the changes still missing'),
+      f => f.issues.get(10).item.appetite === '2 cycles'],
+  ]) {
+    const f = fixture();
+    prepare(f);
+    f.failing.add(fail);
+    await assert.rejects(f.run(argv(f)), { code: 'partial', message }, name);
+    assert.deepEqual(comments(f), [], name);
+    f.failing.delete(fail);
+    await f.run(argv(f));
+    assert.equal(comments(f).length, 1, name);
+    assert.ok(finished(f), name);
+    // A state command then refuses, since its result holds; an edit of the body is not a state and runs again.
+    if (!name.startsWith('pitch edit')) await assert.rejects(f.run(argv(f)), { code: 'input' }, `${name} a third time`);
+  }
+});
+test('a change that failed in the CLI but landed on GitHub leaves the report to be posted by hand', async () => {
+  const f = fixture();
+  const setStatus = f.board.setStatus;
+  f.board.setStatus = async (item, key) => { await setStatus(item, key); throw new ShapeUpError('network', 'Could not reach the GitHub API. Run it again.'); };
+  const argv = ['scope', 'done', '11', ...scopeReport(f)];
+  await assert.rejects(f.run(argv), { code: 'partial', message: partial('scope done #11', ['close #11 as completed'],
+    'set Status of #11 to Done: Could not reach the GitHub API. Run it again.', [], 'report') });
+  f.board.setStatus = setStatus;
+  await assert.rejects(f.run(argv), { code: 'input', message: '#11 is already done: closed as completed and Done.' });
+  assert.deepEqual(comments(f), []);
+});
+test('pitch new and scope new that fail after creating the issue say what is left to do by hand', async () => {
+  const f = fixture();
+  f.failing.add('add N30');
+  await assert.rejects(f.run(['pitch', 'new', '--title', 'T', '--appetite', '2', '--problem', 'p', '--solution', 's', '--rabbit-holes', 'r', '--no-gos', 'n']),
+    { code: 'partial', message: partial('pitch new', ['create #30 https://x/30'], `add #30 to the project: ${graphqlFailed}`,
+      ['set Status of #30 to Shaped', 'set Appetite of #30 to 2 cycles'], 'new') });
+  const g = fixture();
+  g.failing.add('POST /issues/10/sub_issues');
+  await assert.rejects(g.run(['scope', 'new', '--pitch', '10', '--title', 'T', '--done', 'd']),
+    { code: 'partial', message: partial('scope new', ['create #30 https://x/30'], `link #30 as a sub-issue of #10: ${apiFailed}`,
+      ['add #30 to the project', 'set Status of #30 to Bet', 'set Cycle of #30 to Cycle 2', 'set Hill Position of #30 to 0'], 'new') });
+  // When the very first change fails, the command reports that failure alone.
+  const h = fixture();
+  h.failing.add('POST /issues');
+  await assert.rejects(h.run(['cooldown', 'new', '--title', 'T', '--what', 'w', '--done', 'd']), { code: 'api', message: apiFailed });
 });
 test('pitch edit refuses an appetite change before it edits anything', async () => {
   const f = fixture();

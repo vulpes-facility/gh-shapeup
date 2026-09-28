@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { parseArgs } from '../src/cli.mjs';
 import { parseConfig } from '../src/config.mjs';
+import { ShapeUpError } from '../src/domain.mjs';
 import { Init, fieldSpecs, labelSpecs } from '../src/init.mjs';
 
 const config = parseConfig(readFileSync('examples/shapeup.json', 'utf8'));
@@ -15,18 +16,20 @@ const readyFields = () => [
   { id: 'F-hill', name: 'Hill Position', dataType: 'NUMBER' },
 ];
 
-function fixture({ labels = ['pitch', 'scope', 'cooldown', 'bug'], project = { fields: readyFields() }, createdNumber = 7 } = {}) {
+function fixture({ labels = ['pitch', 'scope', 'cooldown', 'bug'], project = { fields: readyFields() }, createdNumber = 7, fail = () => false } = {}) {
   const calls = [];
   const api = {
     repository: 'octo/repo',
     async rest(path, options = {}) {
       calls.push(['rest', options.method ?? 'GET', path, options.body]);
+      if (fail(calls.at(-1))) throw new ShapeUpError('api', 'GitHub API request failed (HTTP 500).');
       if ((options.method ?? 'GET') === 'GET') return labels.includes(decodeURIComponent(path.replace('/labels/', ''))) ? { name: path } : null;
       return {};
     },
     async graphql(query, variables, options = {}) {
       const name = /(createProjectV2Field|createProjectV2|deleteProjectV2Field|updateProjectV2Field)\(/.exec(query)?.[1] ?? 'read';
       calls.push(['graphql', name, variables, options]);
+      if (fail(calls.at(-1))) throw new ShapeUpError('graphql', 'A GitHub Project GraphQL request failed.');
       if (name === 'read') return { owner: { id: 'U1', projectV2: project && { id: 'P1', number: 1, url: 'https://x/1', fields: { nodes: project.fields } } }, repository: { id: 'R1' } };
       if (name === 'createProjectV2') return { createProjectV2: { projectV2: { id: 'P2', number: createdNumber, url: `https://x/${createdNumber}`,
         fields: { nodes: [{ id: 'F-default', name: 'Status', dataType: 'SINGLE_SELECT', options: [{ id: 'd1', name: 'Todo' }, { id: 'd2', name: 'Done' }] }] } } } };
@@ -107,4 +110,43 @@ test('the specs follow the config names', () => {
   const [status] = fieldSpecs(renamed);
   assert.equal(status.name, 'State');
   assert.equal(status.options[0].name, 'Ready');
+});
+
+test('init that fails after a change says what it made and that running it again finishes', async () => {
+  const f = fixture({ labels: ['bug'], project: { fields: readyFields().filter(field => field.name === 'Status') },
+    fail: call => call[1] === 'createProjectV2Field' && call[2].input.name === 'Cycle' });
+  await assert.rejects(f.run(false), { code: 'partial', message: [
+    'init stopped after 4 changes. Nothing was rolled back.',
+    'Made:', '- create label "pitch"', '- create label "scope"', '- create label "cooldown"', '- create field "Appetite"',
+    'Failed:', '- create field "Cycle": A GitHub Project GraphQL request failed.',
+    'Not attempted: the rest of init.',
+    'To finish, run init again: it leaves alone what already matches the config.',
+  ].join('\n') });
+  const fields = readyFields();
+  fields[3] = { id: 'F-hill', name: 'Hill Position', dataType: 'TEXT' };
+  const g = fixture({ project: { fields }, fail: call => call[1] === 'createProjectV2Field' });
+  await assert.rejects(g.run(true), { code: 'partial', message: /^init stopped after 7 changes\. [\s\S]*- delete field "Hill Position" of type TEXT\nFailed:\n- create field "Hill Position" as NUMBER: A GitHub Project GraphQL request failed\.\nNot attempted: the rest of init\.\nTo finish, run init --force again: / });
+  // A failure before any change is reported as it is.
+  const h = fixture({ labels: [], fail: call => call[0] === 'rest' && call[1] === 'POST' });
+  await assert.rejects(h.run(false), { code: 'api', message: 'GitHub API request failed (HTTP 500).' });
+});
+
+test('init that created the project tells to set its number and run with --force', async () => {
+  const lines = (made, failed, finish) => ['init stopped after 2 changes. Nothing was rolled back.', 'Made:', ...made.map(line => `- ${line}`),
+    'Failed:', `- ${failed}`, 'Not attempted: the rest of init.', finish].join('\n');
+  const failAppetite = call => call[1] === 'createProjectV2Field' && call[2].input.name === 'Appetite';
+  const f = fixture({ project: null, createdNumber: 7, fail: failAppetite });
+  await assert.rejects(f.run(false), { code: 'partial', message: lines(['create the project', 'set the options of field "Status"'],
+    'create field "Appetite": A GitHub Project GraphQL request failed.', 'To finish, set "projectNumber": 7 in the config, then run init --force.') });
+  const g = fixture({ project: null, createdNumber: 1, fail: failAppetite });
+  await assert.rejects(g.run(false), { code: 'partial', message: lines(['create the project', 'set the options of field "Status"'],
+    'create field "Appetite": A GitHub Project GraphQL request failed.', 'To finish, run init --force again: the project this run created is set up only with --force.') });
+});
+test('a read that fails after a change is named as a read, not as the change before it', async () => {
+  const f = fixture({ labels: ['scope', 'cooldown', 'bug'], fail: call => call[0] === 'rest' && call[1] === 'GET' && call[2] === '/labels/scope' });
+  await assert.rejects(f.run(false), { code: 'partial', message: [
+    'init stopped after 1 change. Nothing was rolled back.', 'Made:', '- create label "pitch"',
+    'Failed:', '- reading from GitHub after the last change: GitHub API request failed (HTTP 500).',
+    'Not attempted: the rest of init.', 'To finish, run init again: it leaves alone what already matches the config.',
+  ].join('\n') });
 });

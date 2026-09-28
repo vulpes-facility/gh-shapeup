@@ -1,3 +1,5 @@
+import { ShapeUpError } from './domain.mjs';
+
 // Creates the labels, the project and its fields that the config names.
 // Whatever already exists is only reported; --force brings it back to what the config says.
 
@@ -49,11 +51,44 @@ export class Init {
 
   warn(message) { this.out(`warning: ${message}`); }
 
+  // Each change is recorded once made, so a run that stops can say what it made and what failed. Between changes,
+  // doing is null, so a failed read is not taken for the change before it.
+  async change(label, run) {
+    this.doing = label;
+    const result = await run();
+    this.made.push(label);
+    this.doing = null;
+    return result;
+  }
+
+  // A second run finds the project by the configured number and sets up a project it did not create only with --force,
+  // so after creating one it needs the new number and --force.
+  finishLine(force) {
+    if (this.createdNumber === undefined) return `To finish, run init${force ? ' --force' : ''} again: it leaves alone what already matches the config.`;
+    if (this.createdNumber !== this.config.projectNumber) return `To finish, set "projectNumber": ${this.createdNumber} in the config, then run init --force.`;
+    return 'To finish, run init --force again: the project this run created is set up only with --force.';
+  }
+
   async run({ force = false } = {}) {
-    await this.labels(force);
-    const project = await this.project();
-    // A project made just now has only GitHub's default fields, so nothing on it can be lost.
-    await this.fields(project, force || project.created);
+    this.made = [];
+    this.doing = null;
+    this.createdNumber = undefined;
+    try {
+      await this.labels(force);
+      const project = await this.project();
+      // A project made just now has only GitHub's default fields, so nothing on it can be lost.
+      await this.fields(project, force || project.created);
+    } catch (error) {
+      // Nothing is rolled back; a second run leaves alone what the first one made.
+      if (!this.made.length) throw error;
+      throw new ShapeUpError('partial', [
+        `init stopped after ${this.made.length} change${this.made.length === 1 ? '' : 's'}. Nothing was rolled back.`,
+        'Made:', ...this.made.map(label => `- ${label}`),
+        'Failed:', `- ${this.doing ?? 'reading from GitHub after the last change'}: ${error.message}`,
+        'Not attempted: the rest of init.',
+        this.finishLine(force),
+      ].join('\n'));
+    }
     this.out('Still by hand: turn on the project workflows "Auto-add to project" (for this repository) and "Auto-add sub-issues to project",');
     this.out('add the repository secret SHAPEUP_PROJECT_TOKEN, and copy the templates, the workflow and the CLI wrapper from examples/.');
   }
@@ -63,10 +98,10 @@ export class Init {
       const path = `/labels/${encodeURIComponent(label.name)}`;
       const existing = await this.api.rest(path, { missing: true });
       if (!existing) {
-        await this.api.rest('/labels', { method: 'POST', body: label });
+        await this.change(`create label "${label.name}"`, () => this.api.rest('/labels', { method: 'POST', body: label }));
         this.out(`created label "${label.name}"`);
       } else if (force) {
-        await this.api.rest(path, { method: 'PATCH', body: { color: label.color, description: label.description } });
+        await this.change(`update label "${label.name}"`, () => this.api.rest(path, { method: 'PATCH', body: { color: label.color, description: label.description } }));
         this.out(`updated label "${label.name}"`);
       } else {
         this.warn(`label "${label.name}" exists; left as it is (--force updates it)`);
@@ -86,9 +121,10 @@ export class Init {
       this.warn(`project #${existing.number} exists; left as it is`);
       return { id: existing.id, fields: existing.fields.nodes, created: false };
     }
-    const created = (await this.api.graphql(`mutation($owner:ID!,$repository:ID!,$title:String!) {
+    const created = (await this.change('create the project', () => this.api.graphql(`mutation($owner:ID!,$repository:ID!,$title:String!) {
       createProjectV2(input:{ownerId:$owner,repositoryId:$repository,title:$title}) { projectV2 { id number url ${fieldNodes} } }
-    }`, { owner: data.owner.id, repository: data.repository.id, title: 'Betting table' })).createProjectV2.projectV2;
+    }`, { owner: data.owner.id, repository: data.repository.id, title: 'Betting table' }))).createProjectV2.projectV2;
+    this.createdNumber = created.number;
     this.out(`created project #${created.number} ${created.url}`);
     if (created.number !== c.projectNumber) this.out(`set "projectNumber": ${created.number} in the config`);
     return { id: created.id, fields: created.fields.nodes, created: true };
@@ -98,12 +134,13 @@ export class Init {
     for (const spec of fieldSpecs(this.config)) {
       const field = project.fields.find(node => node.name === spec.name);
       if (!field) {
-        await this.create(project.id, spec);
+        await this.change(`create field "${spec.name}"`, () => this.create(project.id, spec));
         this.out(`created field "${spec.name}"`);
       } else if (field.dataType !== spec.dataType) {
         if (!force) { this.warn(`field "${spec.name}" is ${field.dataType}, not ${spec.dataType}; left as it is (--force recreates it)`); continue; }
-        await this.api.graphql(`mutation($field:ID!) { deleteProjectV2Field(input:{fieldId:$field}) { clientMutationId } }`, { field: field.id });
-        await this.create(project.id, spec);
+        await this.change(`delete field "${spec.name}" of type ${field.dataType}`,
+          () => this.api.graphql(`mutation($field:ID!) { deleteProjectV2Field(input:{fieldId:$field}) { clientMutationId } }`, { field: field.id }));
+        await this.change(`create field "${spec.name}" as ${spec.dataType}`, () => this.create(project.id, spec));
         this.out(`recreated field "${spec.name}" as ${spec.dataType}`);
       } else if (spec.options && force) {
         // Keeping the id of an option with the same name keeps the items that hold it.
@@ -111,9 +148,9 @@ export class Init {
           const same = field.options.find(item => item.name === option.name);
           return same ? { id: same.id, ...option } : option;
         });
-        await this.api.graphql(`mutation($field:ID!,$options:[ProjectV2SingleSelectFieldOptionInput!]) {
+        await this.change(`set the options of field "${spec.name}"`, () => this.api.graphql(`mutation($field:ID!,$options:[ProjectV2SingleSelectFieldOptionInput!]) {
           updateProjectV2Field(input:{fieldId:$field,singleSelectOptions:$options}) { clientMutationId }
-        }`, { field: field.id, options });
+        }`, { field: field.id, options }));
         this.out(`updated the options of field "${spec.name}"`);
       } else {
         this.warn(`field "${spec.name}" exists; left as it is${spec.options ? ' (--force sets its options)' : ''}`);
