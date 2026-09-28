@@ -3,7 +3,8 @@
 Run [Shape Up](https://basecamp.com/shapeup) on GitHub Issues and Projects.
 
 - A **CLI** that creates and edits pitches, scopes, cooldowns and bugs from your issue templates,
-  bets pitches on cycles, moves scopes on the hill with a reason, and audits the board for drift.
+  bets pitches on cycles, moves scopes on the hill, leaves the reason for every change as a comment on the issue,
+  and audits the board for drift.
   It installs as the gh extension `gh shapeup`.
 - A **GitHub Action** that draws each pitch's hill chart as an SVG and keeps it at the top of the pitch body.
 
@@ -48,27 +49,32 @@ Every field, option and label name above is a default and can be renamed in the 
 
 ```
 gh shapeup pitch new --title T --appetite <key> --problem … --solution … --rabbit-holes … --no-gos …
-gh shapeup pitch edit <number> [--title T] [section parameters] [--appetite <key>]
-gh shapeup pitch bet <number> --cycle "<cycle title>"
-gh shapeup pitch unbet <number>
-gh shapeup pitch break <number>
-gh shapeup pitch done <number>
+gh shapeup pitch edit <number> [--title T] [section parameters] [--appetite <key>] --reason …
+gh shapeup pitch bet <number> --cycle "<cycle title>" --reason …
+gh shapeup pitch unbet <number> --reason …
+gh shapeup pitch break <number> --reason …
+gh shapeup pitch done <number> --reason …
 gh shapeup scope new --pitch <number> --title T --done …
-gh shapeup scope edit <number> [--title T] [--done …]
-gh shapeup scope start <number>
+gh shapeup scope edit <number> [--title T] [--done …] --reason …
+gh shapeup scope start <number> --reason …
 gh shapeup scope hill <number> --position 0-100 --reason …
-gh shapeup scope done <number>
+gh shapeup scope done <number> --reason …
 gh shapeup cooldown new --title T --what … [--why …] --done …
-gh shapeup cooldown edit <number> [--title T] [section parameters]
+gh shapeup cooldown edit <number> [--title T] [section parameters] --reason …
 gh shapeup bug new --title T --symptom … --steps … --expected … [--environment …]
-gh shapeup bug edit <number> [--title T] [section parameters]
+gh shapeup bug edit <number> [--title T] [section parameters] --reason …
 gh shapeup audit [--pitch <number>]
 gh shapeup init [--force]
 ```
 
 - Section parameters are set per kind in the config's `kinds`; the ones above are the defaults.
 - Every `new` and `edit` also takes `--from <file>` (Markdown split into `## ` sections) and repeated `--footnote name=description`.
-- `scope hill` sets the field first and then posts the reason as a comment, which is what wakes the Action.
+- Every command that changes an existing issue needs a reason: `--reason <text>`, or `--reason-file <file>` with Markdown that is posted as it is.
+  Without one, with both, or with an empty one, the command changes nothing and exits with 2.
+- The command makes its change first and then posts the reason as one comment on the issue it names.
+  `pitch bet`, `unbet` and `break` also change the pitch's scopes, but comment only on the pitch.
+  A failed change posts nothing; a comment that fails after the change is reported, and the command exits with 2.
+- A comment on a scope wakes the Action, so the reason comment of every `scope` command wakes it; after `scope hill` that is what redraws the chart.
 - `init` creates the labels, the project and its fields that the config names, and leaves whatever already exists alone with a warning.
   With `--force` it brings them back to the config: labels get their color and description, options are set to the config's (an option with the same name keeps its id, so items keep their values), and a field of the wrong type is deleted with its values and created again.
   A project that `init` creates gets a new number; set it in the config.

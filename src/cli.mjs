@@ -13,25 +13,27 @@ import { composeBody, editBody, footnoteValues, loadTemplate, sectionValues, tit
 export const usage = `Usage: gh shapeup <kind> <command> [number] [--parameter value ...]
 
   pitch new --title T --appetite <key> --problem … --solution … --rabbit-holes … --no-gos …
-  pitch edit <number> [--title T] [section parameters] [--appetite <key>]
-  pitch bet <number> --cycle "<cycle title>"
-  pitch unbet <number>
-  pitch break <number>
-  pitch done <number>
+  pitch edit <number> [--title T] [section parameters] [--appetite <key>] --reason …
+  pitch bet <number> --cycle "<cycle title>" --reason …
+  pitch unbet <number> --reason …
+  pitch break <number> --reason …
+  pitch done <number> --reason …
   scope new --pitch <number> --title T --done …
-  scope edit <number> [--title T] [--done …]
-  scope start <number>
+  scope edit <number> [--title T] [--done …] --reason …
+  scope start <number> --reason …
   scope hill <number> --position 0-100 --reason …
-  scope done <number>
+  scope done <number> --reason …
   cooldown new --title T --what … [--why …] --done …
-  cooldown edit <number> [--title T] [section parameters]
+  cooldown edit <number> [--title T] [section parameters] --reason …
   bug new --title T --symptom … --steps … --expected … [--environment …]
-  bug edit <number> [--title T] [section parameters]
+  bug edit <number> [--title T] [section parameters] --reason …
   audit [--pitch <number>]
   init [--force]
 
 Section parameters come from the config's kinds; the ones above are the defaults.
-Every new and edit also takes --from <file> (Markdown split into ## sections) and repeated --footnote name=description.`;
+Every new and edit also takes --from <file> (Markdown split into ## sections) and repeated --footnote name=description.
+Every command with --reason makes its change and then posts the reason as a comment on the issue it changed.
+--reason-file <file> gives the reason as a Markdown file instead, posted as it is.`;
 
 const flags = new Set(['force']);
 
@@ -60,6 +62,10 @@ export function parseArgs(argv) {
 }
 
 const need = (value, message) => { if (value === null || value === undefined || value === '') throw new ShapeUpError('input', message); return value; };
+
+// Every command that changes an existing issue leaves the reason on that issue as a comment.
+const needsReason = (kind, action) => action === 'edit' ||
+  ({ pitch: ['bet', 'unbet', 'break', 'done'], scope: ['start', 'hill', 'done'] })[kind]?.includes(action) === true;
 
 export class Cli {
   constructor({ api, board, config, readTemplate, readText = path => readFile(path, 'utf8'), out = console.log }) {
@@ -111,6 +117,26 @@ export class Cli {
   close(number, reason) {
     return this.api.rest(`/issues/${number}`, { method: 'PATCH', body: { state: 'closed', state_reason: reason } });
   }
+  // Exactly one of --reason and --reason-file; the file's Markdown is posted as it is.
+  async reason(options) {
+    const { reason, 'reason-file': file } = options;
+    if (reason !== undefined && file !== undefined) throw new ShapeUpError('input', 'Give --reason or --reason-file, not both.');
+    if (reason === undefined && file === undefined) {
+      throw new ShapeUpError('input', '--reason or --reason-file is required: every change leaves its reason on the issue.');
+    }
+    let text = reason?.trim();
+    if (file !== undefined) {
+      try { text = await this.readText(file); } catch { throw new ShapeUpError('input', `Cannot read the reason file ${file}.`); }
+    }
+    if (!text.trim()) throw new ShapeUpError('input', 'The reason is empty.');
+    return text;
+  }
+  // The comment follows the change, so a failed change leaves none. On a scope it also wakes the hill chart Action.
+  async explain(number, reason) {
+    try { await this.api.rest(`/issues/${number}/comments`, { method: 'POST', body: { body: reason } }); } catch (error) {
+      throw new ShapeUpError('comment', `#${number} was changed, but its reason comment failed: ${error.message} Post the reason on #${number} by hand.`);
+    }
+  }
   async run(args) {
     const { kind, action } = args;
     const s = this.config.statuses;
@@ -133,6 +159,9 @@ export class Cli {
       return findings;
     }
     if (!this.spec(kind)) throw new ShapeUpError('input', usage);
+    // The reason is checked before anything changes and posted only once the change is made.
+    const reason = needsReason(kind, action) ? await this.reason(args.options) : null;
+    const changed = async (number, message) => { await this.explain(number, reason); return done(message); };
     if (action === 'new' && (kind === 'cooldown' || kind === 'bug')) {
       const issue = await this.create(kind, args);
       return done(`#${issue.number} ${issue.html_url}`);
@@ -144,7 +173,7 @@ export class Cli {
         if (issue.item?.status !== s.shaped) throw new ShapeUpError('input', `Appetite changes only on a pitch that is ${s.shaped}.`);
         await this.board.setAppetite(issue.item.id, args.options.appetite);
       }
-      return done(`#${issue.number} updated`);
+      return changed(issue.number, `#${issue.number} updated`);
     }
     await this.board.load();
     if (kind === 'pitch' && action === 'new') {
@@ -167,7 +196,7 @@ export class Cli {
         await this.board.setCycle(scope.item.id, iteration);
         if ([s.shaped, null].includes(scope.item.status)) await this.board.setStatus(scope.item.id, 'bet');
       }
-      return done(`#${pitch.number} bet on ${args.options.cycle}`);
+      return changed(pitch.number, `#${pitch.number} bet on ${args.options.cycle}`);
     }
     if (kind === 'pitch' && action === 'unbet') {
       const pitch = await this.boardIssue(args.number, 'pitch');
@@ -177,7 +206,7 @@ export class Cli {
         await this.board.setStatus(scope.item.id, 'shaped');
         await this.board.clear(scope.item.id, 'cycle');
       }
-      return done(`#${pitch.number} back to ${s.shaped}`);
+      return changed(pitch.number, `#${pitch.number} back to ${s.shaped}`);
     }
     if (kind === 'pitch' && action === 'break') {
       const pitch = await this.boardIssue(args.number, 'pitch');
@@ -187,7 +216,7 @@ export class Cli {
       }
       if (pitch.state === 'open') await this.close(pitch.number, 'not_planned');
       await this.board.setStatus(pitch.item.id, 'dropped');
-      return done(`#${pitch.number} closed by the circuit breaker`);
+      return changed(pitch.number, `#${pitch.number} closed by the circuit breaker`);
     }
     if (kind === 'pitch' && action === 'done') {
       const pitch = await this.boardIssue(args.number, 'pitch');
@@ -195,7 +224,7 @@ export class Cli {
       if (open.length) throw new ShapeUpError('input', `Scopes are still open: ${open.join(', ')}`);
       if (pitch.state === 'open') await this.close(pitch.number, 'completed');
       await this.board.setStatus(pitch.item.id, 'done');
-      return done(`#${pitch.number} done`);
+      return changed(pitch.number, `#${pitch.number} done`);
     }
     if (kind === 'scope' && action === 'new') {
       const pitch = await this.boardIssue(need(args.options.pitch, '--pitch is required.') && Number(args.options.pitch), 'pitch');
@@ -212,24 +241,22 @@ export class Cli {
       const scope = await this.boardIssue(args.number, 'scope');
       if (scope.state !== 'open') throw new ShapeUpError('input', `#${scope.number} is closed.`);
       await this.board.setStatus(scope.item.id, 'doing');
-      return done(`#${scope.number} ${s.doing}`);
+      return changed(scope.number, `#${scope.number} ${s.doing}`);
     }
     if (kind === 'scope' && action === 'hill') {
       const scope = await this.boardIssue(args.number, 'scope');
       const raw = need(args.options.position, '--position is required.');
       if (!/^[0-9]{1,3}$/.test(raw)) throw new ShapeUpError('position', 'Hill Position must be an integer from 0 to 100.');
       const position = requirePosition(Number(raw));
-      const reason = need(args.options.reason?.trim(), '--reason is required: a hill move always leaves its reason.');
       await this.board.setHill(scope.item.id, position);
       // The reason comment is also the hill chart Action's trigger, so it must follow the field change.
-      await this.api.rest(`/issues/${scope.number}/comments`, { method: 'POST', body: { body: reason } });
-      return done(`#${scope.number} hill ${scope.item.hill ?? 0} → ${position}`);
+      return changed(scope.number, `#${scope.number} hill ${scope.item.hill ?? 0} → ${position}`);
     }
     if (kind === 'scope' && action === 'done') {
       const scope = await this.boardIssue(args.number, 'scope');
       if (scope.state === 'open') await this.close(scope.number, 'completed');
       await this.board.setStatus(scope.item.id, 'done');
-      return done(`#${scope.number} done`);
+      return changed(scope.number, `#${scope.number} done`);
     }
     throw new ShapeUpError('input', usage);
   }

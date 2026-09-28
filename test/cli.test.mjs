@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { Cli, credentials, findRoot, parseArgs } from '../src/cli.mjs';
 import { audit } from '../src/audit.mjs';
 import { parseConfig } from '../src/config.mjs';
+import { ShapeUpError } from '../src/domain.mjs';
 
 const config = parseConfig(readFileSync('examples/shapeup.json', 'utf8'));
 const s = config.statuses;
@@ -15,14 +16,19 @@ const cycle = { title: 'Cycle 2', id: 'c2' };
 function fixture() {
   const calls = [];
   const issues = new Map();
+  const files = new Map();
+  const failing = new Set();
   let next = 30;
   const boardIssue = (number, labels, item, extra = {}) => issues.set(number, { number, title: `T${number}`, body: '',
     state: 'open', stateReason: null, labels, parent: null, item, ...extra });
   boardIssue(10, ['pitch'], { id: 'I10', status: s.bet, appetite: '1 cycle', cycle, hill: null });
   boardIssue(11, ['scope'], { id: 'I11', status: s.bet, cycle, hill: 30 }, { parent: 10 });
   boardIssue(12, ['scope'], { id: 'I12', status: s.doing, cycle, hill: null }, { parent: 10 });
+  boardIssue(20, ['cooldown'], null);
+  boardIssue(21, ['bug'], null);
   const api = {
     async rest(path, options = {}) {
+      if (failing.has(`${options.method ?? 'GET'} ${path}`)) throw new ShapeUpError('api', 'GitHub API request failed (HTTP 500).');
       calls.push(['rest', options.method ?? 'GET', path, options.body]);
       if (path === '/issues' && options.method === 'POST') { const number = next++; return { number, id: number * 10, node_id: `N${number}`, html_url: `https://x/${number}` }; }
       return {};
@@ -43,8 +49,8 @@ function fixture() {
   };
   const out = [];
   const cli = new Cli({ api, board, config, readTemplate: name => readFileSync(`examples/ISSUE_TEMPLATE/${name}`, 'utf8'),
-    readText: async () => '', out: line => out.push(line) });
-  return { cli, calls, issues, out, run: argv => cli.run(parseArgs(argv)) };
+    readText: async path => { if (!files.has(path)) throw new Error(`ENOENT ${path}`); return files.get(path); }, out: line => out.push(line) });
+  return { cli, board, calls, issues, files, failing, out, run: argv => cli.run(parseArgs(argv)) };
 }
 
 test('arguments: kind, action, number, repeated footnotes, missing values', () => {
@@ -118,25 +124,25 @@ test('scope hill sets the field before the reason comment, and needs a reason', 
 });
 test('pitch break closes open scopes and the pitch as not planned and keeps the cycle', async () => {
   const f = fixture();
-  await f.run(['pitch', 'break', '10']);
-  assert.deepEqual(f.calls.filter(c => c[0] === 'rest').map(c => [c[2], c[3].state_reason]),
+  await f.run(['pitch', 'break', '10', '--reason', 'Out of time.']);
+  assert.deepEqual(f.calls.filter(c => c[1] === 'PATCH').map(c => [c[2], c[3].state_reason]),
     [['/issues/11', 'not_planned'], ['/issues/12', 'not_planned'], ['/issues/10', 'not_planned']]);
   assert.ok(f.calls.filter(c => c[0] === 'status').every(c => c[2] === 'dropped'));
   assert.ok(!f.calls.some(c => c[0] === 'clear'));
 });
 test('pitch done refuses while a scope is open', async () => {
   const f = fixture();
-  await assert.rejects(f.run(['pitch', 'done', '10']), /#11, #12/);
+  await assert.rejects(f.run(['pitch', 'done', '10', '--reason', 'Shipped.']), /#11, #12/);
 });
 test('pitch bet and unbet move the pitch and its open scopes together', async () => {
   const f = fixture();
   f.issues.get(10).item.status = s.shaped;
   f.issues.get(11).item.status = s.shaped;
-  await f.run(['pitch', 'bet', '10', '--cycle', 'Cycle 2']);
+  await f.run(['pitch', 'bet', '10', '--cycle', 'Cycle 2', '--reason', 'Bet at the table.']);
   assert.deepEqual(f.calls.filter(c => ['status', 'cycle'].includes(c[0])),
     [['status', 'I10', 'bet'], ['cycle', 'I10', 'c2'], ['cycle', 'I11', 'c2'], ['status', 'I11', 'bet'], ['cycle', 'I12', 'c2']]);
   const g = fixture();
-  await g.run(['pitch', 'unbet', '10']);
+  await g.run(['pitch', 'unbet', '10', '--reason', 'Not this cycle.']);
   assert.deepEqual(g.calls.filter(c => c[0] === 'clear').map(c => c[1]), ['I10', 'I11', 'I12']);
 });
 test('cooldown and bug are created from their templates without touching the board', async () => {
@@ -149,7 +155,80 @@ test('cooldown and bug are created from their templates without touching the boa
 });
 test('edit refuses the wrong kind', async () => {
   const f = fixture();
-  await assert.rejects(f.run(['scope', 'edit', '10', '--done', 'x']), { code: 'type' });
+  await assert.rejects(f.run(['scope', 'edit', '10', '--done', 'x', '--reason', 'y']), { code: 'type' });
+});
+
+// Each command that changes an issue, the issue it comments on, and what makes it succeed in the fixture.
+const changes = [
+  [['pitch', 'edit', '10', '--title', 'Renamed'], 10],
+  [['pitch', 'bet', '10', '--cycle', 'Cycle 2'], 10],
+  [['pitch', 'unbet', '10'], 10],
+  [['pitch', 'break', '10'], 10],
+  [['pitch', 'done', '10'], 10, f => { f.issues.get(11).state = 'closed'; f.issues.get(12).state = 'closed'; }],
+  [['scope', 'edit', '11', '--done', 'Merged'], 11],
+  [['scope', 'start', '11'], 11],
+  [['scope', 'hill', '11', '--position', '45'], 11],
+  [['scope', 'done', '11'], 11],
+  [['cooldown', 'edit', '20', '--what', 'Tidy'], 20],
+  [['bug', 'edit', '21', '--expected', 'It moves'], 21],
+];
+const comments = f => f.calls.filter(c => c[0] === 'rest' && c[2].endsWith('/comments'));
+
+test('every change needs exactly one non-empty reason and checks it before anything changes', async () => {
+  for (const [argv] of changes) {
+    const name = argv.slice(0, 2).join(' ');
+    const f = fixture();
+    f.files.set('blank.md', ' \n\t\n');
+    await assert.rejects(f.run(argv), { code: 'input', message: /^--reason or --reason-file is required/ }, name);
+    await assert.rejects(f.run([...argv, '--reason', 'a', '--reason-file', 'why.md']), { code: 'input', message: /not both/ }, name);
+    await assert.rejects(f.run([...argv, '--reason', '']), { code: 'input', message: 'The reason is empty.' }, name);
+    await assert.rejects(f.run([...argv, '--reason', '  \t ']), { code: 'input', message: 'The reason is empty.' }, name);
+    await assert.rejects(f.run([...argv, '--reason-file', 'blank.md']), { code: 'input', message: 'The reason is empty.' }, name);
+    await assert.rejects(f.run([...argv, '--reason-file', 'missing.md']), { code: 'input', message: 'Cannot read the reason file missing.md.' }, name);
+    assert.deepEqual(f.calls, [], name);
+  }
+});
+test('each change is followed by one reason comment on the issue it names', async () => {
+  for (const [argv, number, prepare] of changes) {
+    const name = argv.slice(0, 2).join(' ');
+    const f = fixture();
+    prepare?.(f);
+    await f.run([...argv, '--reason', `  Why ${name}.  `]);
+    assert.deepEqual(comments(f), [['rest', 'POST', `/issues/${number}/comments`, { body: `Why ${name}.` }]], name);
+    assert.ok(f.calls.length > 1, name);
+    assert.deepEqual(f.calls.at(-1), comments(f)[0], name);
+  }
+});
+test('--reason-file posts its Markdown as it is', async () => {
+  for (const [argv, number, prepare] of changes) {
+    const name = argv.slice(0, 2).join(' ');
+    const f = fixture();
+    prepare?.(f);
+    const report = `## Result\n\n- ${name} shipped\n  - with a nested point\n\n    indented code\n`;
+    f.files.set('report.md', report);
+    await f.run([...argv, '--reason-file', 'report.md']);
+    assert.deepEqual(comments(f), [['rest', 'POST', `/issues/${number}/comments`, { body: report }]], name);
+  }
+});
+test('a change that fails posts no comment', async () => {
+  const f = fixture();
+  await assert.rejects(f.run(['pitch', 'bet', '10', '--cycle', 'Cycle 9', '--reason', 'x']), /bad cycle/);
+  await assert.rejects(f.run(['pitch', 'done', '10', '--reason', 'x']), /#11, #12/);
+  await assert.rejects(f.run(['scope', 'hill', '11', '--position', '101', '--reason', 'x']), { code: 'position' });
+  await assert.rejects(f.run(['scope', 'edit', '10', '--done', 'x', '--reason', 'x']), { code: 'type' });
+  f.failing.add('PATCH /issues/20');
+  await assert.rejects(f.run(['cooldown', 'edit', '20', '--what', 'w', '--reason', 'x']), { code: 'api' });
+  f.board.setStatus = async () => { throw new ShapeUpError('graphql', 'A GitHub Project GraphQL request failed.'); };
+  await assert.rejects(f.run(['scope', 'start', '11', '--reason', 'x']), { code: 'graphql' });
+  assert.deepEqual(comments(f), []);
+});
+test('a comment that fails after the change says so', async () => {
+  const f = fixture();
+  f.failing.add('POST /issues/11/comments');
+  await assert.rejects(f.run(['scope', 'start', '11', '--reason', 'Started.']), {
+    code: 'comment', message: /^#11 was changed, but its reason comment failed: GitHub API request failed \(HTTP 500\)\. Post the reason on #11 by hand\.$/ });
+  assert.deepEqual(f.calls.filter(c => c[0] === 'status'), [['status', 'I11', 'doing']]);
+  assert.deepEqual(f.out, []);
 });
 
 const issue = (number, labels, item, extra = {}) => ({ number, labels, state: 'open', stateReason: null, parent: null, body: '', item, ...extra });
