@@ -52,7 +52,7 @@ test('invalid configs are named, not guessed', () => {
   assert.throws(() => parseConfig('{'), { code: 'config' });
 });
 test('a section cannot take the name of a parameter the CLI reads itself', () => {
-  assert.deepEqual(reserved, ['title', 'from', 'footnote', 'reason', 'reason-file', 'report', 'report-file']);
+  assert.deepEqual(reserved, ['title', 'from', 'footnote', 'reason', 'reason-file', 'report', 'report-file', 'appetite', 'pitch', 'cycle', 'position', 'force']);
   for (const param of reserved) {
     assert.throws(() => parse({ ...minimal, kinds: { bug: { template: 'b.md', sections: { [param]: 'Heading' } } } }),
       { code: 'config', message: `kinds.bug.sections.${param} cannot name a section: --${param} is a parameter of the CLI itself.` });

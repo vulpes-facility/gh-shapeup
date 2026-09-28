@@ -38,8 +38,8 @@ export const defaults = {
   chartAlt: 'Hill chart',
 };
 
-// Parameters the CLI reads itself on new, edit and done, so no section can take their names.
-export const reserved = ['title', 'from', 'footnote', 'reason', 'reason-file', 'report', 'report-file'];
+// Parameters the CLI reads itself on any command, so no section can take their names.
+export const reserved = ['title', 'from', 'footnote', 'reason', 'reason-file', 'report', 'report-file', 'appetite', 'pitch', 'cycle', 'position', 'force'];
 
 const fail = message => { throw new ShapeUpError('config', message); };
 const text = value => typeof value === 'string' && value.trim() !== '';
