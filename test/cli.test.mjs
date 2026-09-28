@@ -313,6 +313,47 @@ test('report templates are read from their own path next to the config, never fr
   await assert.rejects(f.run(['scope', 'done', '11', '--report-file', 'report.md']), { code: 'input', message: /^The report has no "## Risks" section/ });
   assert.deepEqual(f.reads, [['report', 'docs/scope-report.md']]);
 });
+test('an edit that names nothing to change is refused before any call', async () => {
+  for (const [kind, number] of [['pitch', '10'], ['scope', '11'], ['cooldown', '20'], ['bug', '21']]) {
+    const f = fixture();
+    f.files.set('other.md', '## Unrelated\n\nText.\n');
+    await assert.rejects(f.run([kind, 'edit', number, '--reason', 'x']), { code: 'input', message: new RegExp(`^${kind} edit changes nothing: give at least one of --title, --from, --footnote, `) });
+    await assert.rejects(f.run([kind, 'edit', number, '--from', 'other.md', '--reason', 'x']), { code: 'input', message: /changes nothing/ });
+    assert.deepEqual(f.calls, [], kind);
+    assert.deepEqual(f.reads, [], kind);
+  }
+  const f = fixture();
+  await assert.rejects(f.run(['pitch', 'edit', '10', '--reason', 'x']), {
+    message: 'pitch edit changes nothing: give at least one of --title, --from, --footnote, --problem, --solution, --rabbit-holes, --no-gos, --appetite.' });
+});
+test('every command refuses an option it does not read, before any call', async () => {
+  const commands = [
+    ['pitch', 'new', '--title', 'T', '--appetite', '1', '--problem', 'p', '--solution', 's', '--rabbit-holes', 'r', '--no-gos', 'n'],
+    ['scope', 'new', '--pitch', '10', '--title', 'T', '--done', 'd'],
+    ['cooldown', 'new', '--title', 'T', '--what', 'w', '--done', 'd'],
+    ['bug', 'new', '--title', 'T', '--symptom', 's', '--steps', '1', '--expected', 'e'],
+    ...changes.map(([argv]) => [...argv, '--reason', 'x']),
+    ...finishes.map(([argv]) => [...argv, '--report-file', 'report.md']),
+    ['audit', '--pitch', '10'],
+    ['init', '--force'],
+  ];
+  for (const argv of commands) {
+    const f = fixture();
+    f.files.set('report.md', reports[argv[0]] ?? '');
+    await assert.rejects(f.run([...argv, '--bogus', 'x']), { code: 'input', message: /does not take --bogus\. It takes --/ }, argv.join(' '));
+    assert.deepEqual(f.calls, [], argv.join(' '));
+  }
+  const f = fixture();
+  f.issues.get(10).item.status = s.shaped;
+  f.files.set('report.md', reports.scope);
+  await assert.rejects(f.run(['pitch', 'edit', '10', '--apetite', '2', '--reason', 'Smaller.']), { code: 'input',
+    message: 'pitch edit does not take --apetite. It takes --title, --from, --footnote, --problem, --solution, --rabbit-holes, --no-gos, --appetite, --reason, --reason-file.' });
+  await assert.rejects(f.run(['scope', 'edit', '11', '--done', 'x', '--appetite', '2', '--reason', 'x']), { message: /^scope edit does not take --appetite\./ });
+  await assert.rejects(f.run(['scope', 'start', '11', '--reason', 'x', '--report-file', 'report.md']), { message: /^scope start does not take --report-file\./ });
+  await assert.rejects(f.run(['scope', 'hill', '11', '--position', '5', '--reason', 'x', '--footnote', 'a=b']), { message: /^scope hill does not take --footnote\./ });
+  await assert.rejects(f.run(['audit', '--pich', '10']), { message: 'audit does not take --pich. It takes --pitch.' });
+  assert.deepEqual(f.calls, []);
+});
 test('pitch edit refuses an appetite change before it edits anything', async () => {
   const f = fixture();
   const argv = appetite => ['pitch', 'edit', '10', '--title', 'Renamed', '--appetite', appetite, '--reason', 'Smaller.'];

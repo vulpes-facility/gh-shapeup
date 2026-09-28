@@ -95,13 +95,37 @@ export class Cli {
       assignees: this.config.assignee ? [this.config.assignee] : [] } });
     return issue;
   }
+  // The options each command reads; any other option is refused before anything happens, so a typo never passes unnoticed.
+  reads(kind, action) {
+    const body = ['title', 'from', 'footnote', ...Object.keys(this.spec(kind).sections)];
+    const reason = ['reason', 'reason-file'];
+    if (action === 'new') return [...body, ...({ pitch: ['appetite'], scope: ['pitch'] }[kind] ?? [])];
+    if (action === 'edit') return [...body, ...(kind === 'pitch' ? ['appetite'] : []), ...reason];
+    return { 'pitch bet': ['cycle', ...reason], 'pitch unbet': reason, 'pitch break': reason, 'pitch done': ['report-file'],
+      'scope start': reason, 'scope hill': ['position', ...reason], 'scope done': ['report-file'] }[`${kind} ${action}`];
+  }
+  refuseUnread(args, reads) {
+    const given = [...Object.keys(args.options), ...(args.footnotes.length ? ['footnote'] : [])];
+    const unread = given.find(name => !reads.includes(name));
+    if (unread) {
+      const command = [args.kind, args.action].filter(Boolean).join(' ');
+      throw new ShapeUpError('input', `${command} does not take --${unread}. It takes ${reads.map(name => `--${name}`).join(', ')}.`);
+    }
+  }
   // check runs after the edit's own checks and before the edit, so it can still refuse.
   async edit(kind, args, check = async () => {}) {
     const number = need(args.number, 'An issue number is required.');
+    const values = await this.values(kind, args);
+    const notes = footnoteValues(args.footnotes);
+    // An edit that names nothing to change would only post its reason.
+    if (!values.size && !notes.size && args.options.title === undefined && args.options.appetite === undefined) {
+      const changes = this.reads(kind, 'edit').filter(name => !name.startsWith('reason'));
+      throw new ShapeUpError('input', `${kind} edit changes nothing: give at least one of ${changes.map(name => `--${name}`).join(', ')}.`);
+    }
     const issue = await this.board.issue(number);
     if (!issue.labels.includes(this.config[`${kind}Label`])) throw new ShapeUpError('type', `#${number} is not a ${kind} issue.`);
     const template = await this.template(kind);
-    const patch = { body: editBody(issue.body, await this.values(kind, args), footnoteValues(args.footnotes)) };
+    const patch = { body: editBody(issue.body, values, notes) };
     if (args.options.title !== undefined) patch.title = titleFor(template, args.options.title);
     await check(issue);
     await this.api.rest(`/issues/${number}`, { method: 'PATCH', body: patch });
@@ -179,10 +203,12 @@ export class Cli {
     const s = this.config.statuses;
     const done = message => { this.out(message); return message; };
     if (kind === 'init') {
+      this.refuseUnread(args, ['force']);
       await new Init({ api: this.api, config: this.config, out: this.out }).run({ force: args.options.force === true });
       return done('init finished');
     }
     if (kind === 'audit') {
+      this.refuseUnread(args, ['pitch']);
       await this.board.load();
       let issues = [...new Map([...await this.board.issuesWith([this.config.pitchLabel]),
         ...await this.board.issuesWith([this.config.scopeLabel])].map(issue => [issue.number, issue])).values()];
@@ -199,13 +225,15 @@ export class Cli {
     // The reason or the report is checked before anything changes and posted only once the change is made.
     const note = needsReport(kind, action) ? { what: 'report', text: await this.report(kind, args.options) }
       : needsReason(kind, action) ? { what: 'reason', text: await this.reason(args.options) } : null;
+    const reads = this.reads(kind, action);
+    if (reads) this.refuseUnread(args, reads);
     const changed = async (number, message) => { await this.explain(number, note); return done(message); };
     if (action === 'new' && (kind === 'cooldown' || kind === 'bug')) {
       const issue = await this.create(kind, args);
       return done(`#${issue.number} ${issue.html_url}`);
     }
     if (action === 'edit') {
-      const appetite = kind === 'pitch' ? args.options.appetite : undefined;
+      const appetite = args.options.appetite;
       // Every refusal comes before the first change, so a change always leaves its comment.
       const issue = await this.edit(kind, args, async pitch => {
         if (appetite === undefined) return;
