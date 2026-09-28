@@ -132,7 +132,7 @@ If running it again says the result already holds, post the reason by hand.
 
 Running the same command again finishes it, since it skips what already holds.
 A change that failed in the CLI may still have landed on GitHub; then the second run finds nothing left to change, and the reason or report is posted by hand.
-`init` also finishes when run again, with `--force` if it created the project, after setting `projectNumber` to the number it printed.
+`init` also finishes when run again. If it created the project, first set `projectNumber` to the number it printed, when that differs, and run it with `--force`.
 `pitch new` and `scope new` would make another issue, so they list the changes left to make by hand instead.
 
 ## Completion reports
