@@ -51,16 +51,28 @@ export class Init {
 
   warn(message) { this.out(`warning: ${message}`); }
 
-  // Each change is recorded once made, so a run that stops can say what it made and what failed.
+  // Each change is recorded once made, so a run that stops can say what it made and what failed. Between changes,
+  // doing is null, so a failed read is not taken for the change before it.
   async change(label, run) {
     this.doing = label;
     const result = await run();
     this.made.push(label);
+    this.doing = null;
     return result;
+  }
+
+  // A second run finds the project by the configured number and sets up a project it did not create only with --force,
+  // so after creating one it needs the new number and --force.
+  finishLine(force) {
+    if (this.createdNumber === undefined) return `To finish, run init${force ? ' --force' : ''} again: it leaves alone what already matches the config.`;
+    if (this.createdNumber !== this.config.projectNumber) return `To finish, set "projectNumber": ${this.createdNumber} in the config, then run init --force.`;
+    return 'To finish, run init --force again: the project this run created is set up only with --force.';
   }
 
   async run({ force = false } = {}) {
     this.made = [];
+    this.doing = null;
+    this.createdNumber = undefined;
     try {
       await this.labels(force);
       const project = await this.project();
@@ -72,9 +84,9 @@ export class Init {
       throw new ShapeUpError('partial', [
         `init stopped after ${this.made.length} change${this.made.length === 1 ? '' : 's'}. Nothing was rolled back.`,
         'Made:', ...this.made.map(label => `- ${label}`),
-        'Failed:', `- ${this.doing}: ${error.message}`,
+        'Failed:', `- ${this.doing ?? 'reading from GitHub after the last change'}: ${error.message}`,
         'Not attempted: the rest of init.',
-        `To finish, run init${force ? ' --force' : ''} again: it leaves alone what already matches the config.`,
+        this.finishLine(force),
       ].join('\n'));
     }
     this.out('Still by hand: turn on the project workflows "Auto-add to project" (for this repository) and "Auto-add sub-issues to project",');
@@ -112,6 +124,7 @@ export class Init {
     const created = (await this.change('create the project', () => this.api.graphql(`mutation($owner:ID!,$repository:ID!,$title:String!) {
       createProjectV2(input:{ownerId:$owner,repositoryId:$repository,title:$title}) { projectV2 { id number url ${fieldNodes} } }
     }`, { owner: data.owner.id, repository: data.repository.id, title: 'Betting table' }))).createProjectV2.projectV2;
+    this.createdNumber = created.number;
     this.out(`created project #${created.number} ${created.url}`);
     if (created.number !== c.projectNumber) this.out(`set "projectNumber": ${created.number} in the config`);
     return { id: created.id, fields: created.fields.nodes, created: true };

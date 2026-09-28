@@ -425,10 +425,14 @@ test('a state command whose result already holds, or that would reopen a finishe
     [() => {}, () => ['pitch', 'bet', '10', '--cycle', 'Cycle 2', '--reason', 'x'], '#10 is already bet on Cycle 2.'],
     [status(10, s.dropped), () => ['pitch', 'bet', '10', '--cycle', 'Cycle 2', '--reason', 'x'], '#10 is finished (Dropped); a finished pitch is not bet again.'],
     [status(10, s.done), () => ['pitch', 'break', '10', '--reason', 'x'], '#10 is done (Done); the circuit breaker stops only a pitch that is not finished.'],
+    [closed(10, 'completed'), () => ['pitch', 'break', '10', '--reason', 'x'], '#10 is done (closed as completed); the circuit breaker stops only a pitch that is not finished.'],
     [f => { closed(10, 'not_planned', s.dropped)(f); closed(11, 'not_planned', s.dropped)(f); closed(12, 'not_planned', s.dropped)(f); },
       () => ['pitch', 'break', '10', '--reason', 'x'], '#10 is already closed by the circuit breaker.'],
     [status(10, s.shaped), () => ['pitch', 'edit', '10', '--appetite', '1', '--reason', 'x'], '#10 already has Appetite 1 cycle.'],
     [closed(10, 'completed', s.done), () => ['scope', 'new', '--pitch', '10', '--title', 'T', '--done', 'd'], '#10 is finished (closed as completed); a new scope needs a pitch that is not finished.'],
+    [status(10, s.done), () => ['scope', 'new', '--pitch', '10', '--title', 'T', '--done', 'd'], '#10 is finished (Done); a new scope needs a pitch that is not finished.'],
+    [status(10, s.dropped), () => ['scope', 'new', '--pitch', '10', '--title', 'T', '--done', 'd'], '#10 is finished (Dropped); a new scope needs a pitch that is not finished.'],
+    [closed(11, 'duplicate'), f => ['scope', 'done', '11', ...scopeReport(f)], `#11 was dropped (closed as duplicate); a dropped scope is not done. ${hint}`],
   ]) {
     const f = fixture();
     prepare(f);
@@ -458,11 +462,12 @@ test('a finished scope keeps its state when its pitch is bet, unbet or broken, a
   await g.run(['pitch', 'break', '10', '--reason', 'Out of time.']);
   assert.deepEqual(g.calls.filter(c => c[1] === 'I13'), [['status', 'I13', 'dropped']]);
 });
-const partial = (command, made, failed, rest, finish) => [
+const partial = (command, made, failed, rest, finish, again = 'it makes only the changes still missing') => [
   `${command} stopped after ${made.length} of ${made.length + 1 + rest.length} changes. Nothing was rolled back${finish === 'new' ? '' : `, and the ${finish} was not posted`}.`,
   'Made:', ...made.map(line => `- ${line}`), 'Failed:', `- ${failed}`, ...(rest.length ? ['Not attempted:', ...rest.map(line => `- ${line}`)] : []),
-  finish === 'new' ? 'To finish, make the failed and remaining changes by hand. Running the command again would create another issue.'
-    : `To finish, run the same command again: it makes only the changes still missing and then posts the ${finish}. Or make them by hand and post the ${finish} yourself.`,
+  ...(finish === 'new' ? ['To finish, make the failed and remaining changes by hand. Running the command again would create another issue.']
+    : [`To finish, run the same command again: ${again} and then posts the ${finish}. Or make them by hand and post the ${finish} yourself.`,
+      `If running it again says the result already holds, post the ${finish} by hand.`]),
 ].join('\n');
 const graphqlFailed = 'A GitHub Project GraphQL request failed.';
 const apiFailed = 'GitHub API request failed (HTTP 500).';
@@ -488,7 +493,8 @@ test('a command that fails after its first change reports what was made and what
       partial('scope done #11', ['close #11 as completed'], `set Status of #11 to Done: ${graphqlFailed}`, [], 'report'),
       f => f.issues.get(11).state === 'closed' && f.issues.get(11).item.status === s.done],
     ['pitch edit --appetite', f => { f.issues.get(10).item.status = s.shaped; }, 'appetite I10', () => ['pitch', 'edit', '10', '--title', 'Smaller', '--appetite', '2', '--reason', 'Smaller.'],
-      partial('pitch edit #10', ['edit the title and body of #10'], `set Appetite of #10 to 2 cycles: ${graphqlFailed}`, [], 'reason'),
+      partial('pitch edit #10', ['edit the title and body of #10'], `set Appetite of #10 to 2 cycles: ${graphqlFailed}`, [], 'reason',
+        'it sends the same edit again, makes the changes still missing'),
       f => f.issues.get(10).item.appetite === '2 cycles'],
   ]) {
     const f = fixture();
@@ -503,6 +509,17 @@ test('a command that fails after its first change reports what was made and what
     // A state command then refuses, since its result holds; an edit of the body is not a state and runs again.
     if (!name.startsWith('pitch edit')) await assert.rejects(f.run(argv(f)), { code: 'input' }, `${name} a third time`);
   }
+});
+test('a change that failed in the CLI but landed on GitHub leaves the report to be posted by hand', async () => {
+  const f = fixture();
+  const setStatus = f.board.setStatus;
+  f.board.setStatus = async (item, key) => { await setStatus(item, key); throw new ShapeUpError('network', 'Could not reach the GitHub API. Run it again.'); };
+  const argv = ['scope', 'done', '11', ...scopeReport(f)];
+  await assert.rejects(f.run(argv), { code: 'partial', message: partial('scope done #11', ['close #11 as completed'],
+    'set Status of #11 to Done: Could not reach the GitHub API. Run it again.', [], 'report') });
+  f.board.setStatus = setStatus;
+  await assert.rejects(f.run(argv), { code: 'input', message: '#11 is already done: closed as completed and Done.' });
+  assert.deepEqual(comments(f), []);
 });
 test('pitch new and scope new that fail after creating the issue say what is left to do by hand', async () => {
   const f = fixture();

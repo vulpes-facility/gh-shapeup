@@ -94,15 +94,17 @@ so it runs from anywhere in the repository (override the path with `SHAPEUP_CONF
 ## State commands
 
 A command changes only what differs from its result, and refuses without a comment when nothing differs.
-A finished scope, one that is closed, Done or Dropped, is never reopened: the work that follows it is a new scope, made with `scope new`.
+A pitch or scope is finished when it is closed, or open with the Status Done or Dropped: the issue's state comes first, and the Status counts only while the issue is open.
+It is done when it was closed as completed, or is open and Done; it was dropped when it was closed as anything else, or is open and Dropped.
+A finished scope is never reopened: the work that follows it is a new scope, made with `scope new`.
 A done scope that did not reach the top of the hill may still be moved to 100.
 
 | Command | Refuses when |
 | --- | --- |
-| `pitch bet` | the pitch is finished (closed, Done or Dropped), or it and its unfinished scopes are already on the cycle and past Shaped |
+| `pitch bet` | the pitch is finished, or it and its unfinished scopes are already on the cycle and past Shaped |
 | `pitch unbet` | the pitch is finished, or it and its unfinished scopes are already Shaped with no cycle |
-| `pitch break` | the pitch is done (closed as completed, or Done), or it and its scopes that are not done are already closed as not planned and Dropped |
-| `pitch done` | the pitch was dropped (closed as anything but completed, or Dropped), is already closed as completed and Done, or has an open scope |
+| `pitch break` | the pitch is done, or it and its scopes that are not done are already closed as not planned and Dropped |
+| `pitch done` | the pitch was dropped, is already closed as completed and Done, or has an open scope |
 | `scope start` | the scope is finished, or already In progress |
 | `scope hill` | the scope was dropped, is done and the position is not 100, or is already at the position (empty counts as 0) |
 | `scope done` | the scope was dropped, or is already closed as completed and Done |
@@ -125,9 +127,12 @@ Not attempted:
 - set Status of #11 to Bet
 - set Cycle of #12 to Cycle 2
 To finish, run the same command again: it makes only the changes still missing and then posts the reason. Or make them by hand and post the reason yourself.
+If running it again says the result already holds, post the reason by hand.
 ```
 
-Running the same command again finishes it, and so does running `init` again.
+Running the same command again finishes it, since it skips what already holds.
+A change that failed in the CLI may still have landed on GitHub; then the second run finds nothing left to change, and the reason or report is posted by hand.
+`init` also finishes when run again, with `--force` if it created the project, after setting `projectNumber` to the number it printed.
 `pitch new` and `scope new` would make another issue, so they list the changes left to make by hand instead.
 
 ## Completion reports

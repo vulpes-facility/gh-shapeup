@@ -191,14 +191,17 @@ export class Cli {
   }
   // Makes a command's changes in order. Nothing is rolled back: when a change fails after an earlier one was made, the
   // error lists what was made, what failed, what was not attempted and how to finish, and no comment is posted.
-  async apply(command, steps, { note = null, rerun = true } = {}) {
+  // again says what running the command again does; an edit sends the same edit again.
+  async apply(command, steps, { note = null, rerun = true, again = 'it makes only the changes still missing' } = {}) {
     for (const [index, step] of steps.entries()) {
       try { await step.run(); } catch (error) {
         if (index === 0) throw error;
         const name = item => (typeof item.label === 'function' ? item.label() : item.label);
         const rest = steps.slice(index + 1).map(item => `- ${name(item)}`);
         const finish = rerun
-          ? `To finish, run the same command again: it makes only the changes still missing${note ? ` and then posts the ${note.what}` : ''}. Or make them by hand${note ? ` and post the ${note.what} yourself` : ''}.`
+          ? [`To finish, run the same command again: ${again}${note ? ` and then posts the ${note.what}` : ''}. Or make them by hand${note ? ` and post the ${note.what} yourself` : ''}.`,
+            // A change that failed here may still have landed on GitHub.
+            ...(note ? [`If running it again says the result already holds, post the ${note.what} by hand.`] : [])].join('\n')
           : 'To finish, make the failed and remaining changes by hand. Running the command again would create another issue.';
         throw new ShapeUpError('partial', [
           `${command} stopped after ${index} of ${steps.length} changes. Nothing was rolled back${note ? `, and the ${note.what} was not posted` : ''}.`,
@@ -307,7 +310,7 @@ export class Cli {
         if (issue.item.appetite !== name) steps.push(step(set(issue.number, c.appetiteField, name), () => this.board.setAppetite(issue.item.id, appetite)));
         else if (!patch) throw new ShapeUpError('input', `#${issue.number} already has ${c.appetiteField} ${name}.`);
       }
-      await this.apply(`${kind} edit #${issue.number}`, steps, { note });
+      await this.apply(`${kind} edit #${issue.number}`, steps, { note, again: 'it sends the same edit again, makes the changes still missing' });
       return changed(issue.number, `#${issue.number} updated`);
     }
     await this.board.load();
