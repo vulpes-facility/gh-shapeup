@@ -35,7 +35,8 @@ Every new and edit also takes --from <file> (Markdown split into ## sections) an
 Every command with --reason makes its change and then posts the reason as a comment on the issue it changed.
 --reason-file <file> gives the reason as a Markdown file instead, posted as it is.
 pitch done and scope done post a completion report the same way, from --report-file <file>:
-exactly the ## sections of the report template, in order, none of them empty.`;
+exactly the ## sections of the report template, in order, none of them empty.
+A command whose result already holds refuses. One that stops part-way says what it made and what is left, and posts nothing.`;
 
 const flags = new Set(['force']);
 
@@ -112,24 +113,24 @@ export class Cli {
       throw new ShapeUpError('input', `${command} does not take --${unread}. It takes ${reads.map(name => `--${name}`).join(', ')}.`);
     }
   }
-  // check runs after the edit's own checks and before the edit, so it can still refuse.
-  async edit(kind, args, check = async () => {}) {
+  // Checks an edit and prepares its patch, or null when it names only the appetite. It changes nothing itself.
+  async edit(kind, args) {
     const number = need(args.number, 'An issue number is required.');
     const values = await this.values(kind, args);
     const notes = footnoteValues(args.footnotes);
+    const body = values.size > 0 || notes.size > 0 || args.options.title !== undefined;
     // An edit that names nothing to change would only post its reason.
-    if (!values.size && !notes.size && args.options.title === undefined && args.options.appetite === undefined) {
+    if (!body && args.options.appetite === undefined) {
       const changes = this.reads(kind, 'edit').filter(name => !name.startsWith('reason'));
       throw new ShapeUpError('input', `${kind} edit changes nothing: give at least one of ${changes.map(name => `--${name}`).join(', ')}.`);
     }
     const issue = await this.board.issue(number);
     if (!issue.labels.includes(this.config[`${kind}Label`])) throw new ShapeUpError('type', `#${number} is not a ${kind} issue.`);
+    if (!body) return { issue, patch: null };
     const template = await this.template(kind);
     const patch = { body: editBody(issue.body, values, notes) };
     if (args.options.title !== undefined) patch.title = titleFor(template, args.options.title);
-    await check(issue);
-    await this.api.rest(`/issues/${number}`, { method: 'PATCH', body: patch });
-    return issue;
+    return { issue, patch };
   }
   appetite(value) {
     const name = this.config.appetites[String(value)];
@@ -153,9 +154,62 @@ export class Cli {
   close(number, reason) {
     return this.api.rest(`/issues/${number}`, { method: 'PATCH', body: { state: 'closed', state_reason: reason } });
   }
-  // A command that closes an issue before it sets the status looks the option up first, so a board without it refuses
-  // before anything closes.
+  // A command looks up every status it sets before its first change, so a board without one refuses before anything changes.
   requireStatus(key) { this.board.option('status', this.config.statuses[key]); }
+  // How a pitch or a scope ended, if it has: closed, or Done or Dropped on the board. Closed as anything but completed,
+  // or Dropped, is not done.
+  ending(issue) {
+    const s = this.config.statuses;
+    if (issue.state === 'closed') {
+      const reason = issue.stateReason ?? 'completed';
+      return { done: reason === 'completed', how: `closed as ${reason.replace(/_/g, ' ')}` };
+    }
+    if (issue.item?.status === s.done) return { done: true, how: s.done };
+    if (issue.item?.status === s.dropped) return { done: false, how: s.dropped };
+    return null;
+  }
+  // The changes that finish a pitch or a scope as done: close it as completed and set Done, each only if it is not so.
+  // A dropped one is refused, and so is one that is already done.
+  finishing(issue, kind) {
+    const c = this.config;
+    const s = c.statuses;
+    const ending = this.ending(issue);
+    if (ending && !ending.done) {
+      throw new ShapeUpError('input', `#${issue.number} was dropped (${ending.how}); a dropped ${kind} is not done.${kind === 'scope' ? ` ${this.newScopeHint(issue)}` : ''}`);
+    }
+    const steps = [];
+    if (issue.state === 'open') steps.push({ label: `close #${issue.number} as completed`, run: () => this.close(issue.number, 'completed') });
+    if (issue.item.status !== s.done) steps.push({ label: `set ${c.statusField} of #${issue.number} to ${s.done}`, run: () => this.board.setStatus(issue.item.id, 'done') });
+    if (!steps.length) throw new ShapeUpError('input', `#${issue.number} is already done: closed as completed and ${s.done}.`);
+    this.requireStatus('done');
+    return steps;
+  }
+  // A finished scope is never reopened: the work that follows it is a new scope.
+  newScopeHint(scope) {
+    const sections = this.spec('scope').required.map(param => ` --${param} …`).join('');
+    return `Work that follows a finished scope is a new scope: gh shapeup scope new --pitch ${scope.parent ?? '<number>'} --title …${sections}.`;
+  }
+  // Makes a command's changes in order. Nothing is rolled back: when a change fails after an earlier one was made, the
+  // error lists what was made, what failed, what was not attempted and how to finish, and no comment is posted.
+  async apply(command, steps, { note = null, rerun = true } = {}) {
+    for (const [index, step] of steps.entries()) {
+      try { await step.run(); } catch (error) {
+        if (index === 0) throw error;
+        const name = item => (typeof item.label === 'function' ? item.label() : item.label);
+        const rest = steps.slice(index + 1).map(item => `- ${name(item)}`);
+        const finish = rerun
+          ? `To finish, run the same command again: it makes only the changes still missing${note ? ` and then posts the ${note.what}` : ''}. Or make them by hand${note ? ` and post the ${note.what} yourself` : ''}.`
+          : 'To finish, make the failed and remaining changes by hand. Running the command again would create another issue.';
+        throw new ShapeUpError('partial', [
+          `${command} stopped after ${index} of ${steps.length} changes. Nothing was rolled back${note ? `, and the ${note.what} was not posted` : ''}.`,
+          'Made:', ...steps.slice(0, index).map(item => `- ${name(item)}`),
+          'Failed:', `- ${name(step)}: ${error.message}`,
+          ...(rest.length ? ['Not attempted:', ...rest] : []),
+          finish,
+        ].join('\n'));
+      }
+    }
+  }
   // A byte order mark is not part of the Markdown.
   async readMarkdown(file, what) {
     try { return (await this.readText(file)).replace(/^\uFEFF/, ''); } catch { throw new ShapeUpError('input', `Cannot read the ${what} file ${file}.`); }
@@ -228,88 +282,131 @@ export class Cli {
     const reads = this.reads(kind, action);
     if (reads) this.refuseUnread(args, reads);
     const changed = async (number, message) => { await this.explain(number, note); return done(message); };
+    const c = this.config;
+    const set = (number, field, value) => `set ${field} of #${number} to ${value}`;
+    const step = (label, run) => ({ label, run });
     if (action === 'new' && (kind === 'cooldown' || kind === 'bug')) {
-      const issue = await this.create(kind, args);
+      let issue;
+      await this.apply(`${kind} new`, [step(`create the ${kind} issue`, async () => { issue = await this.create(kind, args); })]);
       return done(`#${issue.number} ${issue.html_url}`);
     }
     if (action === 'edit') {
+      const { issue, patch } = await this.edit(kind, args);
+      const steps = [];
+      if (patch) {
+        steps.push(step(`edit the ${patch.title === undefined ? 'body' : 'title and body'} of #${issue.number}`,
+          () => this.api.rest(`/issues/${issue.number}`, { method: 'PATCH', body: patch })));
+      }
       const appetite = args.options.appetite;
       // Every refusal comes before the first change, so a change always leaves its comment.
-      const issue = await this.edit(kind, args, async pitch => {
-        if (appetite === undefined) return;
+      if (appetite !== undefined) {
         await this.board.load();
-        if (pitch.item?.status !== s.shaped) throw new ShapeUpError('input', `Appetite changes only on a pitch that is ${s.shaped}.`);
-        this.board.option('appetite', this.appetite(appetite));
-      });
-      if (appetite !== undefined) await this.board.setAppetite(issue.item.id, appetite);
+        if (issue.item?.status !== s.shaped) throw new ShapeUpError('input', `Appetite changes only on a pitch that is ${s.shaped}.`);
+        const name = this.appetite(appetite);
+        this.board.option('appetite', name);
+        if (issue.item.appetite !== name) steps.push(step(set(issue.number, c.appetiteField, name), () => this.board.setAppetite(issue.item.id, appetite)));
+        else if (!patch) throw new ShapeUpError('input', `#${issue.number} already has ${c.appetiteField} ${name}.`);
+      }
+      await this.apply(`${kind} edit #${issue.number}`, steps, { note });
       return changed(issue.number, `#${issue.number} updated`);
     }
     await this.board.load();
     if (kind === 'pitch' && action === 'new') {
       need(args.options.appetite, '--appetite is required.');
-      this.appetite(args.options.appetite);
-      const issue = await this.create('pitch', args);
-      const item = await this.board.add(issue.node_id);
-      await this.board.setStatus(item, 'shaped');
-      await this.board.setAppetite(item, args.options.appetite);
+      const name = this.appetite(args.options.appetite);
+      this.board.option('appetite', name);
+      this.requireStatus('shaped');
+      let issue, item;
+      await this.apply('pitch new', [
+        step(() => (issue ? `create #${issue.number} ${issue.html_url}` : 'create the pitch issue'), async () => { issue = await this.create('pitch', args); }),
+        step(() => `add #${issue.number} to the project`, async () => { item = await this.board.add(issue.node_id); }),
+        step(() => set(issue.number, c.statusField, s.shaped), () => this.board.setStatus(item, 'shaped')),
+        step(() => set(issue.number, c.appetiteField, name), () => this.board.setAppetite(item, args.options.appetite)),
+      ], { rerun: false });
       return done(`#${issue.number} ${issue.html_url}`);
     }
     if (kind === 'pitch' && action === 'bet') {
       const pitch = await this.boardIssue(args.number, 'pitch');
-      const iteration = this.board.iteration(need(args.options.cycle, '--cycle is required.'));
-      await this.board.setStatus(pitch.item.id, 'bet');
-      await this.board.setCycle(pitch.item.id, iteration);
-      for (const scope of (await this.children(pitch)).filter(c => c.state === 'open' && c.item)) {
-        await this.board.setCycle(scope.item.id, iteration);
-        if ([s.shaped, null].includes(scope.item.status)) await this.board.setStatus(scope.item.id, 'bet');
+      const title = need(args.options.cycle, '--cycle is required.');
+      const iteration = this.board.iteration(title);
+      const ending = this.ending(pitch);
+      if (ending) throw new ShapeUpError('input', `#${pitch.number} is finished (${ending.how}); a finished pitch is not bet again.`);
+      const scopes = (await this.children(pitch)).filter(scope => scope.item && !this.ending(scope));
+      this.requireStatus('bet');
+      // Only what differs changes, so a pitch already past Bet keeps its status and a run that stopped can be run again.
+      const steps = [];
+      for (const issue of [pitch, ...scopes]) {
+        if (issue.item.cycle?.id !== iteration) steps.push(step(set(issue.number, c.cycleField, title), () => this.board.setCycle(issue.item.id, iteration)));
+        if ([s.shaped, null].includes(issue.item.status)) steps.push(step(set(issue.number, c.statusField, s.bet), () => this.board.setStatus(issue.item.id, 'bet')));
       }
-      return changed(pitch.number, `#${pitch.number} bet on ${args.options.cycle}`);
+      if (!steps.length) throw new ShapeUpError('input', `#${pitch.number} is already bet on ${title}.`);
+      await this.apply(`pitch bet #${pitch.number}`, steps, { note });
+      return changed(pitch.number, `#${pitch.number} bet on ${title}`);
     }
     if (kind === 'pitch' && action === 'unbet') {
       const pitch = await this.boardIssue(args.number, 'pitch');
-      await this.board.setStatus(pitch.item.id, 'shaped');
-      await this.board.clear(pitch.item.id, 'cycle');
-      for (const scope of (await this.children(pitch)).filter(c => c.state === 'open' && c.item)) {
-        await this.board.setStatus(scope.item.id, 'shaped');
-        await this.board.clear(scope.item.id, 'cycle');
+      const ending = this.ending(pitch);
+      if (ending) throw new ShapeUpError('input', `#${pitch.number} is finished (${ending.how}); a finished pitch is not unbet.`);
+      const scopes = (await this.children(pitch)).filter(scope => scope.item && !this.ending(scope));
+      this.requireStatus('shaped');
+      const steps = [];
+      for (const issue of [pitch, ...scopes]) {
+        if (issue.item.status !== s.shaped) steps.push(step(set(issue.number, c.statusField, s.shaped), () => this.board.setStatus(issue.item.id, 'shaped')));
+        if (issue.item.cycle) steps.push(step(`clear ${c.cycleField} of #${issue.number}`, () => this.board.clear(issue.item.id, 'cycle')));
       }
+      if (!steps.length) throw new ShapeUpError('input', `#${pitch.number} and its scopes are already ${s.shaped} with no ${c.cycleField}.`);
+      await this.apply(`pitch unbet #${pitch.number}`, steps, { note });
       return changed(pitch.number, `#${pitch.number} back to ${s.shaped}`);
     }
     if (kind === 'pitch' && action === 'break') {
       const pitch = await this.boardIssue(args.number, 'pitch');
+      const ending = this.ending(pitch);
+      if (ending?.done) throw new ShapeUpError('input', `#${pitch.number} is done (${ending.how}); the circuit breaker stops only a pitch that is not finished.`);
+      // Scopes that were done stay done; every other scope is dropped with the pitch.
+      const scopes = (await this.children(pitch)).filter(scope => !this.ending(scope)?.done);
       this.requireStatus('dropped');
-      for (const scope of (await this.children(pitch)).filter(c => c.state === 'open')) {
-        await this.close(scope.number, 'not_planned');
-        if (scope.item) await this.board.setStatus(scope.item.id, 'dropped');
+      const steps = [];
+      for (const issue of [...scopes, pitch]) {
+        if (issue.state === 'open') steps.push(step(`close #${issue.number} as not planned`, () => this.close(issue.number, 'not_planned')));
+        if (issue.item && issue.item.status !== s.dropped) steps.push(step(set(issue.number, c.statusField, s.dropped), () => this.board.setStatus(issue.item.id, 'dropped')));
       }
-      if (pitch.state === 'open') await this.close(pitch.number, 'not_planned');
-      await this.board.setStatus(pitch.item.id, 'dropped');
+      if (!steps.length) throw new ShapeUpError('input', `#${pitch.number} is already closed by the circuit breaker.`);
+      await this.apply(`pitch break #${pitch.number}`, steps, { note });
       return changed(pitch.number, `#${pitch.number} closed by the circuit breaker`);
     }
     if (kind === 'pitch' && action === 'done') {
       const pitch = await this.boardIssue(args.number, 'pitch');
-      const open = (await this.children(pitch)).filter(c => c.state === 'open').map(c => `#${c.number}`);
+      const steps = this.finishing(pitch, 'pitch');
+      const open = (await this.children(pitch)).filter(scope => scope.state === 'open').map(scope => `#${scope.number}`);
       if (open.length) throw new ShapeUpError('input', `Scopes are still open: ${open.join(', ')}`);
-      this.requireStatus('done');
-      if (pitch.state === 'open') await this.close(pitch.number, 'completed');
-      await this.board.setStatus(pitch.item.id, 'done');
+      await this.apply(`pitch done #${pitch.number}`, steps, { note });
       return changed(pitch.number, `#${pitch.number} done`);
     }
     if (kind === 'scope' && action === 'new') {
       const pitch = await this.boardIssue(need(args.options.pitch, '--pitch is required.') && Number(args.options.pitch), 'pitch');
-      if (pitch.state !== 'open') throw new ShapeUpError('input', `#${pitch.number} is a closed pitch.`);
-      const issue = await this.create('scope', args);
-      await this.api.rest(`/issues/${pitch.number}/sub_issues`, { method: 'POST', body: { sub_issue_id: issue.id } });
-      const item = await this.board.add(issue.node_id);
-      await this.board.setStatus(item, [s.bet, s.doing].includes(pitch.item.status) ? 'bet' : 'shaped');
-      if (pitch.item.cycle) await this.board.setCycle(item, pitch.item.cycle.id);
-      await this.board.setHill(item, 0);
+      const ending = this.ending(pitch);
+      if (ending) throw new ShapeUpError('input', `#${pitch.number} is finished (${ending.how}); a new scope needs a pitch that is not finished.`);
+      const status = [s.bet, s.doing].includes(pitch.item.status) ? 'bet' : 'shaped';
+      this.requireStatus(status);
+      let issue, item;
+      await this.apply('scope new', [
+        step(() => (issue ? `create #${issue.number} ${issue.html_url}` : 'create the scope issue'), async () => { issue = await this.create('scope', args); }),
+        step(() => `link #${issue.number} as a sub-issue of #${pitch.number}`,
+          () => this.api.rest(`/issues/${pitch.number}/sub_issues`, { method: 'POST', body: { sub_issue_id: issue.id } })),
+        step(() => `add #${issue.number} to the project`, async () => { item = await this.board.add(issue.node_id); }),
+        step(() => set(issue.number, c.statusField, s[status]), () => this.board.setStatus(item, status)),
+        ...(pitch.item.cycle ? [step(() => set(issue.number, c.cycleField, pitch.item.cycle.title), () => this.board.setCycle(item, pitch.item.cycle.id))] : []),
+        step(() => set(issue.number, c.hillField, 0), () => this.board.setHill(item, 0)),
+      ], { rerun: false });
       return done(`#${issue.number} ${issue.html_url}`);
     }
     if (kind === 'scope' && action === 'start') {
       const scope = await this.boardIssue(args.number, 'scope');
-      if (scope.state !== 'open') throw new ShapeUpError('input', `#${scope.number} is closed.`);
-      await this.board.setStatus(scope.item.id, 'doing');
+      const ending = this.ending(scope);
+      if (ending) throw new ShapeUpError('input', `#${scope.number} is finished (${ending.how}) and is not started again. ${this.newScopeHint(scope)}`);
+      if (scope.item.status === s.doing) throw new ShapeUpError('input', `#${scope.number} is already ${s.doing}.`);
+      this.requireStatus('doing');
+      await this.apply(`scope start #${scope.number}`, [step(set(scope.number, c.statusField, s.doing), () => this.board.setStatus(scope.item.id, 'doing'))], { note });
       return changed(scope.number, `#${scope.number} ${s.doing}`);
     }
     if (kind === 'scope' && action === 'hill') {
@@ -317,15 +414,16 @@ export class Cli {
       const raw = need(args.options.position, '--position is required.');
       if (!/^[0-9]{1,3}$/.test(raw)) throw new ShapeUpError('position', 'Hill Position must be an integer from 0 to 100.');
       const position = requirePosition(Number(raw));
-      await this.board.setHill(scope.item.id, position);
+      const ending = this.ending(scope);
+      if (ending) throw new ShapeUpError('input', `#${scope.number} is finished (${ending.how}), so its hill position stays. ${this.newScopeHint(scope)}`);
+      if ((scope.item.hill ?? 0) === position) throw new ShapeUpError('input', `#${scope.number} is already at ${position} on the hill.`);
+      await this.apply(`scope hill #${scope.number}`, [step(set(scope.number, c.hillField, position), () => this.board.setHill(scope.item.id, position))], { note });
       // The reason comment is also the hill chart Action's trigger, so it must follow the field change.
       return changed(scope.number, `#${scope.number} hill ${scope.item.hill ?? 0} → ${position}`);
     }
     if (kind === 'scope' && action === 'done') {
       const scope = await this.boardIssue(args.number, 'scope');
-      this.requireStatus('done');
-      if (scope.state === 'open') await this.close(scope.number, 'completed');
-      await this.board.setStatus(scope.item.id, 'done');
+      await this.apply(`scope done #${scope.number}`, this.finishing(scope, 'scope'), { note });
       return changed(scope.number, `#${scope.number} done`);
     }
     throw new ShapeUpError('input', usage);

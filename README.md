@@ -80,6 +80,7 @@ gh shapeup init [--force]
   `pitch bet`, `unbet` and `break` also change the pitch's scopes, but comment only on the pitch.
   Every check that can refuse the command comes before its first change.
   A failed change posts nothing; a comment that fails after the change is reported, and the command exits with 2.
+- A command whose result already holds refuses, and one that stops part-way says what it made; see [State commands](#state-commands).
 - A comment on a scope wakes the Action, so the comment of every `scope` command wakes it; after `scope hill` that is what redraws the chart.
 - `init` creates the labels, the project and its fields that the config names, and leaves whatever already exists alone with a warning.
   With `--force` it brings them back to the config: labels get their color and description, options are set to the config's (an option with the same name keeps its id, so items keep their values), and a field of the wrong type is deleted with its values and created again.
@@ -89,6 +90,44 @@ gh shapeup init [--force]
 The CLI asks `gh` for the token and the repository; `GH_TOKEN` and `SHAPEUP_REPOSITORY` override them.
 It reads `.github/shapeup.json` from the nearest directory at or above the working directory,
 so it runs from anywhere in the repository (override the path with `SHAPEUP_CONFIG`).
+
+## State commands
+
+A command changes only what differs from its result, and refuses without a comment when nothing differs.
+A finished scope, one that is closed, Done or Dropped, is never reopened: the work that follows it is a new scope, made with `scope new`.
+
+| Command | Refuses when |
+| --- | --- |
+| `pitch bet` | the pitch is finished (closed, Done or Dropped), or it and its unfinished scopes are already on the cycle and past Shaped |
+| `pitch unbet` | the pitch is finished, or it and its unfinished scopes are already Shaped with no cycle |
+| `pitch break` | the pitch is done (closed as completed, or Done), or it and its scopes that are not done are already closed as not planned and Dropped |
+| `pitch done` | the pitch was dropped (closed as anything but completed, or Dropped), is already closed as completed and Done, or has an open scope |
+| `scope start` | the scope is finished, or already In progress |
+| `scope hill` | the scope is finished, or already at the position (empty counts as 0) |
+| `scope done` | the scope was dropped, or is already closed as completed and Done |
+| `scope new` | the pitch is finished |
+| `pitch edit --appetite` | the pitch is not Shaped, or the appetite is the only change and the pitch already has it |
+
+A finished scope keeps its state when its pitch is bet, unbet or broken, and a pitch that is bet keeps a status past Bet.
+
+A command with several changes makes them in order and rolls nothing back.
+When one fails after an earlier one was made, the command exits with 2, posts no comment and says what is left:
+
+```
+pitch bet #10 stopped after 2 of 5 changes. Nothing was rolled back, and the reason was not posted.
+Made:
+- set Cycle of #10 to Cycle 2
+- set Status of #10 to Bet
+Failed:
+- set Cycle of #11 to Cycle 2: A GitHub Project GraphQL request failed. …
+Not attempted:
+- set Status of #11 to Bet
+- set Cycle of #12 to Cycle 2
+To finish, run the same command again: it makes only the changes still missing and then posts the reason. Or make them by hand and post the reason yourself.
+```
+
+Running the same command again finishes it, and so does running `init` again.
+`pitch new` and `scope new` would make another issue, so they list the changes left to make by hand instead.
 
 ## Completion reports
 
