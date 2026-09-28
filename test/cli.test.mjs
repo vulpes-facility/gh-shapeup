@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Cli, credentials, findRoot, parseArgs } from '../src/cli.mjs';
+import { Cli, credentials, findRoot, main, parseArgs, reportTemplateReader } from '../src/cli.mjs';
 import { audit } from '../src/audit.mjs';
 import { parseConfig } from '../src/config.mjs';
 import { ShapeUpError } from '../src/domain.mjs';
@@ -297,6 +297,27 @@ test('a repository overrides the report template in its config or with a templat
   await assert.rejects(h.run(['scope', 'done', '11', '--report-file', 'report.md']),
     { code: 'template', message: 'The report template .github/shapeup/scope-report.md has no "## Evidence" section.' });
   assert.deepEqual(h.calls, []);
+});
+// main runs no GitHub call here: each run stops at the report check, before the first one.
+test('main reads report templates under the repository root, never from the issue templates, and stops on an unreadable one', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'shapeup-'));
+  const github = join(root, '.github');
+  await mkdir(join(github, 'shapeup'), { recursive: true });
+  await mkdir(join(github, 'ISSUE_TEMPLATE'));
+  await mkdir(join(root, 'sub'));
+  await writeFile(join(github, 'shapeup.json'), JSON.stringify({ projectOwner: 'octocat', projectOwnerType: 'user', projectNumber: 1 }));
+  await writeFile(join(github, 'ISSUE_TEMPLATE', 'scope-report.md'), '## Outcome\n\n## Decoy\n');
+  const report = join(root, 'report.md');
+  await writeFile(report, '## Outcome\n\nMerged.\n');
+  const run = () => main(['scope', 'done', '11', '--report-file', report], { GH_TOKEN: 'unused', SHAPEUP_REPOSITORY: 'o/r' }, join(root, 'sub'));
+  await assert.rejects(run(), { code: 'input', message: 'The report has no "## Evidence" section. It needs ## Outcome, ## Evidence, ## Follow-ups.' });
+  const template = '## Outcome\n\n## Risks\n\n## Evidence\n\n## Follow-ups\n';
+  await writeFile(join(github, 'shapeup', 'scope-report.md'), template);
+  assert.equal(await reportTemplateReader(root)('.github/shapeup/scope-report.md'), template);
+  await assert.rejects(run(), { code: 'input', message: 'The report has no "## Risks" section. It needs ## Outcome, ## Risks, ## Evidence, ## Follow-ups.' });
+  await rm(join(github, 'shapeup', 'scope-report.md'));
+  await mkdir(join(github, 'shapeup', 'scope-report.md'));
+  await assert.rejects(run(), { code: 'template', message: 'Cannot read the report template .github/shapeup/scope-report.md.' });
 });
 test('report templates are read from their own path next to the config, never from the issue templates', async () => {
   for (const [[argv, , prepare], path] of [[finishes[0], '.github/shapeup/pitch-report.md'], [finishes[1], '.github/shapeup/scope-report.md']]) {
