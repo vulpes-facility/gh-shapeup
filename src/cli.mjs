@@ -72,11 +72,12 @@ const needsReason = (kind, action) => action === 'edit' ||
   ({ pitch: ['bet', 'unbet', 'break'], scope: ['start', 'hill'] })[kind]?.includes(action) === true;
 
 export class Cli {
-  constructor({ api, board, config, readTemplate, readText = path => readFile(path, 'utf8'), out = console.log }) {
+  constructor({ api, board, config, readTemplate, readReportTemplate, readText = path => readFile(path, 'utf8'), out = console.log }) {
     this.api = api;
     this.board = board;
     this.config = config;
     this.readTemplate = readTemplate;
+    this.readReportTemplate = readReportTemplate;
     this.readText = readText;
     this.out = out;
   }
@@ -146,11 +147,11 @@ export class Cli {
     if (!text.trim()) throw new ShapeUpError('input', 'The reason is empty.');
     return text;
   }
-  // Without a template file in templateDir, the config's headings are the report template.
+  // Without a file at the template's path, the config's headings are the report template.
   async reportTemplate(kind) {
     const spec = this.config.reports[kind];
     let text = null;
-    try { text = await this.readTemplate(spec.template); } catch (error) {
+    try { text = await this.readReportTemplate(spec.template); } catch (error) {
       if (error.code !== 'ENOENT') throw new ShapeUpError('template', `Cannot read the report template ${spec.template}.`);
     }
     return loadReport(kind, spec, text);
@@ -339,7 +340,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const { token, repository } = await credentials(env);
   const api = new GitHub({ repository, repositoryToken: token, projectToken: token });
   const cli = new Cli({ api, board: new Board(api, config), config,
-    readTemplate: name => readFile(resolve(root, config.templateDir, name), 'utf8') });
+    readTemplate: name => readFile(resolve(root, config.templateDir, name), 'utf8'),
+    readReportTemplate: path => readFile(resolve(root, path), 'utf8') });
   const result = await cli.run(args);
   return Array.isArray(result) && result.length ? 1 : 0;
 }

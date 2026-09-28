@@ -120,11 +120,12 @@ None.
 A repository changes the template in either of two ways:
 
 - **Config.** `reports.pitch` and `reports.scope` in `.github/shapeup.json` set the sections, in order,
-  such as `"scope": { "template": "scope-report.md", "sections": ["Outcome", "Verification", "Follow-ups"] }`.
+  such as `"scope": { "template": ".github/shapeup/scope-report.md", "sections": ["Outcome", "Verification", "Follow-ups"] }`.
   A report left out keeps its default.
-- **Template file.** A file with the name in `template` (`pitch-report.md` or `scope-report.md` by default) in `templateDir`,
-  where the issue templates are, becomes the template: its `## ` sections, in its order, are the report's.
-  It carries at least the sections the config names, may add more, and may hold HTML comments as guidance.
+- **Template file.** A file at the path in `template` becomes the template: its `## ` sections, in its order, are the report's.
+  The paths are `.github/shapeup/pitch-report.md` and `.github/shapeup/scope-report.md` by default, next to the config;
+  `template` can name another path, relative to the repository root.
+  The file carries at least the sections the config names, may add more, and may hold HTML comments as guidance.
   Without that file, the config's sections are the template.
 
 ## Hill chart

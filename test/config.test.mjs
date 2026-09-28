@@ -16,6 +16,8 @@ test('only the project location is required; everything else has a default', () 
   assert.deepEqual(config.reports, defaultReports);
   assert.deepEqual(config.reports.pitch.sections, ['Outcome', 'Scopes', 'Accepted limits', 'Follow-ups']);
   assert.deepEqual(config.reports.scope.sections, ['Outcome', 'Evidence', 'Follow-ups']);
+  assert.equal(config.reports.pitch.template, '.github/shapeup/pitch-report.md');
+  assert.equal(config.reports.scope.template, '.github/shapeup/scope-report.md');
   assert.deepEqual(parseConfig(readFileSync('examples/shapeup.json', 'utf8')).templateDir, defaults.templateDir);
 });
 test('partial statuses and kinds keep the defaults they do not name', () => {

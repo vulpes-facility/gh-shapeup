@@ -14,10 +14,11 @@ export const defaultKinds = {
 };
 
 // The completion report that pitch done and scope done post is these ## sections, in order.
-// A template file of that name in templateDir, if there is one, is the template instead.
+// A file at the template path, relative to the repository root, is the template instead if it exists.
+// Report templates sit next to the config, not among the issue templates.
 export const defaultReports = {
-  pitch: { template: 'pitch-report.md', sections: ['Outcome', 'Scopes', 'Accepted limits', 'Follow-ups'] },
-  scope: { template: 'scope-report.md', sections: ['Outcome', 'Evidence', 'Follow-ups'] },
+  pitch: { template: '.github/shapeup/pitch-report.md', sections: ['Outcome', 'Scopes', 'Accepted limits', 'Follow-ups'] },
+  scope: { template: '.github/shapeup/scope-report.md', sections: ['Outcome', 'Evidence', 'Follow-ups'] },
 };
 
 export const defaults = {

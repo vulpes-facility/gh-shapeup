@@ -22,6 +22,7 @@ function fixture() {
   const issues = new Map();
   const files = new Map();
   const templates = new Map();
+  const reads = [];
   const failing = new Set();
   let next = 30;
   const boardIssue = (number, labels, item, extra = {}) => issues.set(number, { number, title: `T${number}`, body: '',
@@ -58,9 +59,14 @@ function fixture() {
   };
   const out = [];
   const cli = new Cli({ api, board, config,
-    readTemplate: name => templates.get(name) ?? readFileSync(`examples/ISSUE_TEMPLATE/${name}`, 'utf8'),
+    readTemplate: name => { reads.push(['template', name]); return readFileSync(`examples/ISSUE_TEMPLATE/${name}`, 'utf8'); },
+    readReportTemplate: async path => {
+      reads.push(['report', path]);
+      if (!templates.has(path)) throw Object.assign(new Error(`ENOENT ${path}`), { code: 'ENOENT' });
+      return templates.get(path);
+    },
     readText: async path => { if (!files.has(path)) throw new Error(`ENOENT ${path}`); return files.get(path); }, out: line => out.push(line) });
-  return { cli, board, calls, issues, files, templates, failing, out, run: argv => cli.run(parseArgs(argv)) };
+  return { cli, board, calls, issues, files, templates, reads, failing, out, run: argv => cli.run(parseArgs(argv)) };
 }
 
 test('arguments: kind, action, number, repeated footnotes, missing values', () => {
@@ -269,7 +275,7 @@ test('a completion report is posted as given, after the change, on the issue it 
 });
 test('a repository overrides the report template in its config or with a template file', async () => {
   const f = fixture();
-  f.cli.config = { ...config, reports: { ...config.reports, scope: { template: 'scope-report.md', sections: ['Outcome', 'Verification'] } } };
+  f.cli.config = { ...config, reports: { ...config.reports, scope: { template: '.github/shapeup/scope-report.md', sections: ['Outcome', 'Verification'] } } };
   f.files.set('default.md', reports.scope);
   await assert.rejects(f.run(['scope', 'done', '11', '--report-file', 'default.md']), { code: 'input', message: /^The report has no "## Verification" section/ });
   f.files.set('verified.md', '## Outcome\n\nMerged.\n\n## Verification\n\nThe smoke suite passed.\n');
@@ -278,7 +284,7 @@ test('a repository overrides the report template in its config or with a templat
 
   const g = fixture();
   finishes[0][2](g);
-  g.templates.set('pitch-report.md', '<!-- Fill in every section. -->\n\n## Outcome\n\n<!-- What shipped. -->\n\n## Scopes\n\n## Risks\n\n## Accepted limits\n\n## Follow-ups\n');
+  g.templates.set('.github/shapeup/pitch-report.md', '<!-- Fill in every section. -->\n\n## Outcome\n\n<!-- What shipped. -->\n\n## Scopes\n\n## Risks\n\n## Accepted limits\n\n## Follow-ups\n');
   g.files.set('default.md', reports.pitch);
   await assert.rejects(g.run(['pitch', 'done', '10', '--report-file', 'default.md']), { code: 'input', message: /^The report has no "## Risks" section/ });
   g.files.set('risks.md', reports.pitch.replace('## Accepted limits', '## Risks\n\nThe provider may be slow.\n\n## Accepted limits'));
@@ -286,11 +292,26 @@ test('a repository overrides the report template in its config or with a templat
   assert.deepEqual(comments(g).map(c => c[3].body), [g.files.get('risks.md')]);
 
   const h = fixture();
-  h.templates.set('scope-report.md', '## Outcome\n\n## Follow-ups\n');
+  h.templates.set('.github/shapeup/scope-report.md', '## Outcome\n\n## Follow-ups\n');
   h.files.set('report.md', reports.scope);
   await assert.rejects(h.run(['scope', 'done', '11', '--report-file', 'report.md']),
-    { code: 'template', message: 'The report template scope-report.md has no "## Evidence" section.' });
+    { code: 'template', message: 'The report template .github/shapeup/scope-report.md has no "## Evidence" section.' });
   assert.deepEqual(h.calls, []);
+});
+test('report templates are read from their own path next to the config, never from the issue templates', async () => {
+  for (const [[argv, , prepare], path] of [[finishes[0], '.github/shapeup/pitch-report.md'], [finishes[1], '.github/shapeup/scope-report.md']]) {
+    const f = fixture();
+    prepare(f);
+    f.files.set('report.md', reports[argv[0]]);
+    await f.run([...argv, '--report-file', 'report.md']);
+    assert.deepEqual(f.reads, [['report', path]]);
+  }
+  const f = fixture();
+  f.cli.config = { ...config, reports: { ...config.reports, scope: { ...config.reports.scope, template: 'docs/scope-report.md' } } };
+  f.templates.set('docs/scope-report.md', '## Outcome\n\n## Evidence\n\n## Risks\n\n## Follow-ups\n');
+  f.files.set('report.md', reports.scope);
+  await assert.rejects(f.run(['scope', 'done', '11', '--report-file', 'report.md']), { code: 'input', message: /^The report has no "## Risks" section/ });
+  assert.deepEqual(f.reads, [['report', 'docs/scope-report.md']]);
 });
 test('pitch edit refuses an appetite change before it edits anything', async () => {
   const f = fixture();
