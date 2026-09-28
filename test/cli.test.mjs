@@ -413,7 +413,11 @@ test('a state command whose result already holds, or that would reopen a finishe
     [closed(11, 'not_planned'), () => ['scope', 'start', '11', '--reason', 'x'], `#11 is finished (closed as not planned) and is not started again. ${hint}`],
     [() => {}, () => ['scope', 'hill', '11', '--position', '30', '--reason', 'x'], '#11 is already at 30 on the hill.'],
     [() => {}, () => ['scope', 'hill', '12', '--position', '0', '--reason', 'x'], '#12 is already at 0 on the hill.'],
-    [closed(11, 'completed', s.done), () => ['scope', 'hill', '11', '--position', '100', '--reason', 'x'], `#11 is finished (closed as completed), so its hill position stays. ${hint}`],
+    [closed(11, 'completed', s.done), () => ['scope', 'hill', '11', '--position', '90', '--reason', 'x'], `#11 is done (closed as completed), so it moves only to 100 on the hill. ${hint}`],
+    [status(11, s.done), () => ['scope', 'hill', '11', '--position', '0', '--reason', 'x'], `#11 is done (Done), so it moves only to 100 on the hill. ${hint}`],
+    [f => { closed(11, 'completed', s.done)(f); f.issues.get(11).item.hill = 100; }, () => ['scope', 'hill', '11', '--position', '100', '--reason', 'x'], '#11 is already at 100 on the hill.'],
+    [closed(11, 'not_planned', s.dropped), () => ['scope', 'hill', '11', '--position', '100', '--reason', 'x'], `#11 was dropped (closed as not planned), so its hill position stays. ${hint}`],
+    [status(11, s.dropped), () => ['scope', 'hill', '11', '--position', '50', '--reason', 'x'], `#11 was dropped (Dropped), so its hill position stays. ${hint}`],
     [f => { closed(10, 'completed', s.done)(f); closeScopes(f); }, f => ['pitch', 'done', '10', ...pitchReport(f)], '#10 is already done: closed as completed and Done.'],
     [closed(10, 'not_planned', s.dropped), f => ['pitch', 'done', '10', ...pitchReport(f)], '#10 was dropped (closed as not planned); a dropped pitch is not done.'],
     [f => { for (const n of [10, 11, 12]) status(n, s.shaped, { cycle: null })(f); }, () => ['pitch', 'unbet', '10', '--reason', 'x'], '#10 and its scopes are already Shaped with no Cycle.'],
@@ -431,6 +435,15 @@ test('a state command whose result already holds, or that would reopen a finishe
     const args = argv(f);
     await assert.rejects(f.run(args), { code: 'input', message }, args.join(' '));
     assert.deepEqual(f.calls.filter(c => c[0] !== 'load'), [], args.join(' '));
+  }
+});
+test('a done scope that did not reach the top of the hill can still be moved to 100', async () => {
+  for (const prepare of [f => Object.assign(f.issues.get(11), { state: 'closed', stateReason: 'completed' }), f => { f.issues.get(11).item.status = s.done; }]) {
+    const f = fixture();
+    prepare(f);
+    await f.run(['scope', 'hill', '11', '--position', '100', '--reason', 'Finished without reaching the top.']);
+    assert.deepEqual(f.calls.filter(c => c[0] !== 'load').map(c => c.slice(0, 3)), [['hill', 'I11', 100], ['rest', 'POST', '/issues/11/comments']]);
+    assert.match(f.out.at(-1), /30 → 100/);
   }
 });
 test('a finished scope keeps its state when its pitch is bet, unbet or broken, and only unfinished scopes follow', async () => {

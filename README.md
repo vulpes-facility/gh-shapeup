@@ -95,6 +95,7 @@ so it runs from anywhere in the repository (override the path with `SHAPEUP_CONF
 
 A command changes only what differs from its result, and refuses without a comment when nothing differs.
 A finished scope, one that is closed, Done or Dropped, is never reopened: the work that follows it is a new scope, made with `scope new`.
+A done scope that did not reach the top of the hill may still be moved to 100.
 
 | Command | Refuses when |
 | --- | --- |
@@ -103,7 +104,7 @@ A finished scope, one that is closed, Done or Dropped, is never reopened: the wo
 | `pitch break` | the pitch is done (closed as completed, or Done), or it and its scopes that are not done are already closed as not planned and Dropped |
 | `pitch done` | the pitch was dropped (closed as anything but completed, or Dropped), is already closed as completed and Done, or has an open scope |
 | `scope start` | the scope is finished, or already In progress |
-| `scope hill` | the scope is finished, or already at the position (empty counts as 0) |
+| `scope hill` | the scope was dropped, is done and the position is not 100, or is already at the position (empty counts as 0) |
 | `scope done` | the scope was dropped, or is already closed as completed and Done |
 | `scope new` | the pitch is finished |
 | `pitch edit --appetite` | the pitch is not Shaped, or the appetite is the only change and the pitch already has it |

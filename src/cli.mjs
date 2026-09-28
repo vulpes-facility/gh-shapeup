@@ -414,8 +414,10 @@ export class Cli {
       const raw = need(args.options.position, '--position is required.');
       if (!/^[0-9]{1,3}$/.test(raw)) throw new ShapeUpError('position', 'Hill Position must be an integer from 0 to 100.');
       const position = requirePosition(Number(raw));
+      // A done scope may still be moved to the top of the hill, where it belongs; nothing else moves a finished scope.
       const ending = this.ending(scope);
-      if (ending) throw new ShapeUpError('input', `#${scope.number} is finished (${ending.how}), so its hill position stays. ${this.newScopeHint(scope)}`);
+      if (ending && !ending.done) throw new ShapeUpError('input', `#${scope.number} was dropped (${ending.how}), so its hill position stays. ${this.newScopeHint(scope)}`);
+      if (ending && position !== 100) throw new ShapeUpError('input', `#${scope.number} is done (${ending.how}), so it moves only to 100 on the hill. ${this.newScopeHint(scope)}`);
       if ((scope.item.hill ?? 0) === position) throw new ShapeUpError('input', `#${scope.number} is already at ${position} on the hill.`);
       await this.apply(`scope hill #${scope.number}`, [step(set(scope.number, c.hillField, position), () => this.board.setHill(scope.item.id, position))], { note });
       // The reason comment is also the hill chart Action's trigger, so it must follow the field change.
