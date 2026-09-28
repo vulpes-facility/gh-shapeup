@@ -94,15 +94,22 @@ export class Cli {
       assignees: this.config.assignee ? [this.config.assignee] : [] } });
     return issue;
   }
-  async edit(kind, args) {
+  // check runs after the edit's own checks and before the edit, so it can still refuse.
+  async edit(kind, args, check = async () => {}) {
     const number = need(args.number, 'An issue number is required.');
     const issue = await this.board.issue(number);
     if (!issue.labels.includes(this.config[`${kind}Label`])) throw new ShapeUpError('type', `#${number} is not a ${kind} issue.`);
     const template = await this.template(kind);
     const patch = { body: editBody(issue.body, await this.values(kind, args), footnoteValues(args.footnotes)) };
     if (args.options.title !== undefined) patch.title = titleFor(template, args.options.title);
+    await check(issue);
     await this.api.rest(`/issues/${number}`, { method: 'PATCH', body: patch });
     return issue;
+  }
+  appetite(value) {
+    const name = this.config.appetites[String(value)];
+    if (!name) throw new ShapeUpError('input', `--appetite must be one of: ${Object.keys(this.config.appetites).join(', ')}.`);
+    return name;
   }
   async boardIssue(number, label) {
     const issue = await this.board.issue(need(number, 'An issue number is required.'));
@@ -121,6 +128,9 @@ export class Cli {
   close(number, reason) {
     return this.api.rest(`/issues/${number}`, { method: 'PATCH', body: { state: 'closed', state_reason: reason } });
   }
+  // A command that closes an issue before it sets the status looks the option up first, so a board without it refuses
+  // before anything closes.
+  requireStatus(key) { this.board.option('status', this.config.statuses[key]); }
   // A byte order mark is not part of the Markdown.
   async readMarkdown(file, what) {
     try { return (await this.readText(file)).replace(/^\uFEFF/, ''); } catch { throw new ShapeUpError('input', `Cannot read the ${what} file ${file}.`); }
@@ -194,20 +204,21 @@ export class Cli {
       return done(`#${issue.number} ${issue.html_url}`);
     }
     if (action === 'edit') {
-      const issue = await this.edit(kind, args);
-      if (kind === 'pitch' && args.options.appetite !== undefined) {
+      const appetite = kind === 'pitch' ? args.options.appetite : undefined;
+      // Every refusal comes before the first change, so a change always leaves its comment.
+      const issue = await this.edit(kind, args, async pitch => {
+        if (appetite === undefined) return;
         await this.board.load();
-        if (issue.item?.status !== s.shaped) throw new ShapeUpError('input', `Appetite changes only on a pitch that is ${s.shaped}.`);
-        await this.board.setAppetite(issue.item.id, args.options.appetite);
-      }
+        if (pitch.item?.status !== s.shaped) throw new ShapeUpError('input', `Appetite changes only on a pitch that is ${s.shaped}.`);
+        this.board.option('appetite', this.appetite(appetite));
+      });
+      if (appetite !== undefined) await this.board.setAppetite(issue.item.id, appetite);
       return changed(issue.number, `#${issue.number} updated`);
     }
     await this.board.load();
     if (kind === 'pitch' && action === 'new') {
       need(args.options.appetite, '--appetite is required.');
-      if (!this.config.appetites[String(args.options.appetite)]) {
-        throw new ShapeUpError('input', `--appetite must be one of: ${Object.keys(this.config.appetites).join(', ')}.`);
-      }
+      this.appetite(args.options.appetite);
       const issue = await this.create('pitch', args);
       const item = await this.board.add(issue.node_id);
       await this.board.setStatus(item, 'shaped');
@@ -237,6 +248,7 @@ export class Cli {
     }
     if (kind === 'pitch' && action === 'break') {
       const pitch = await this.boardIssue(args.number, 'pitch');
+      this.requireStatus('dropped');
       for (const scope of (await this.children(pitch)).filter(c => c.state === 'open')) {
         await this.close(scope.number, 'not_planned');
         if (scope.item) await this.board.setStatus(scope.item.id, 'dropped');
@@ -249,6 +261,7 @@ export class Cli {
       const pitch = await this.boardIssue(args.number, 'pitch');
       const open = (await this.children(pitch)).filter(c => c.state === 'open').map(c => `#${c.number}`);
       if (open.length) throw new ShapeUpError('input', `Scopes are still open: ${open.join(', ')}`);
+      this.requireStatus('done');
       if (pitch.state === 'open') await this.close(pitch.number, 'completed');
       await this.board.setStatus(pitch.item.id, 'done');
       return changed(pitch.number, `#${pitch.number} done`);
@@ -281,6 +294,7 @@ export class Cli {
     }
     if (kind === 'scope' && action === 'done') {
       const scope = await this.boardIssue(args.number, 'scope');
+      this.requireStatus('done');
       if (scope.state === 'open') await this.close(scope.number, 'completed');
       await this.board.setStatus(scope.item.id, 'done');
       return changed(scope.number, `#${scope.number} done`);

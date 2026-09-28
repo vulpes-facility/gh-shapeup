@@ -50,6 +50,10 @@ function fixture() {
     async setHill(item, value) { calls.push(['hill', item, value]); },
     async clear(item, field) { calls.push(['clear', item, field]); },
     iteration(title) { if (title !== 'Cycle 2') throw new Error('bad cycle'); return 'c2'; },
+    option(field, name) {
+      if (![...Object.values(s), ...Object.values(config.appetites)].includes(name)) throw new ShapeUpError('field', `The field has no option named "${name}".`);
+      return name;
+    },
     async issuesWith() { return [...issues.values()]; },
   };
   const out = [];
@@ -287,6 +291,35 @@ test('a repository overrides the report template in its config or with a templat
   await assert.rejects(h.run(['scope', 'done', '11', '--report-file', 'report.md']),
     { code: 'template', message: 'The report template scope-report.md has no "## Evidence" section.' });
   assert.deepEqual(h.calls, []);
+});
+test('pitch edit refuses an appetite change before it edits anything', async () => {
+  const f = fixture();
+  const argv = appetite => ['pitch', 'edit', '10', '--title', 'Renamed', '--appetite', appetite, '--reason', 'Smaller.'];
+  const made = () => f.calls.filter(c => c[0] !== 'load');
+  await assert.rejects(f.run(argv('2')), { code: 'input', message: 'Appetite changes only on a pitch that is Shaped.' });
+  f.issues.get(10).item.status = s.shaped;
+  await assert.rejects(f.run(argv('3')), { code: 'input', message: '--appetite must be one of: 1, 2.' });
+  f.cli.config = { ...config, appetites: { ...config.appetites, 3: '3 cycles' } };
+  await assert.rejects(f.run(argv('3')), { code: 'field' });
+  assert.deepEqual(made(), []);
+  f.cli.config = config;
+  await f.run(argv('2'));
+  assert.deepEqual(made().map(c => c.slice(0, 3)), [['rest', 'PATCH', '/issues/10'], ['appetite', 'I10', '2'], ['rest', 'POST', '/issues/10/comments']]);
+});
+test('a board without the status option refuses before anything closes', async () => {
+  for (const [argv, key, prepare] of [
+    [['pitch', 'break', '10', '--reason', 'Out of time.'], 'dropped', () => {}],
+    [['pitch', 'done', '10', '--report-file', 'pitch.md'], 'done', finishes[0][2]],
+    [['scope', 'done', '11', '--report-file', 'scope.md'], 'done', () => {}],
+  ]) {
+    const f = fixture();
+    prepare(f);
+    f.files.set('pitch.md', reports.pitch);
+    f.files.set('scope.md', reports.scope);
+    f.cli.config = { ...config, statuses: { ...s, [key]: 'Gone' } };
+    await assert.rejects(f.run(argv), { code: 'field' }, argv.slice(0, 2).join(' '));
+    assert.deepEqual(f.calls.filter(c => c[0] !== 'load'), [], argv.slice(0, 2).join(' '));
+  }
 });
 test('a change that fails posts no comment', async () => {
   const f = fixture();

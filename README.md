@@ -75,6 +75,7 @@ gh shapeup init [--force]
   Without one, with both, or with an empty one, the command changes nothing and exits with 2.
 - The command makes its change first and then posts the reason or the report as one comment on the issue it names, with nothing added.
   `pitch bet`, `unbet` and `break` also change the pitch's scopes, but comment only on the pitch.
+  Every check that can refuse the command comes before its first change.
   A failed change posts nothing; a comment that fails after the change is reported, and the command exits with 2.
 - A comment on a scope wakes the Action, so the comment of every `scope` command wakes it; after `scope hill` that is what redraws the chart.
 - `init` creates the labels, the project and its fields that the config names, and leaves whatever already exists alone with a warning.
