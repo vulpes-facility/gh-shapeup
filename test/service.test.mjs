@@ -123,6 +123,18 @@ test('closing a scope as not planned removes its dot; closing as completed keeps
   Object.assign(f.issues.get(12), { state: 'closed', state_reason: 'completed' });
   assert.equal(await f.service.lifecycle({ action: 'closed', issue: f.issues.get(12) }), 'unchanged');
 });
+test('a comment on a scope closed as not planned aligns its pitch without it, but an open scope missing from its pitch fails', async () => {
+  const f = fixture();
+  assert.equal(await f.service.comment(f.comment(13)), 'drawn #10');
+  assert.deepEqual([...drawnValues(f.issues.get(10).body)], [[11, 20], [12, 0]]);
+  assert.equal(await f.service.comment(f.comment(13)), 'unchanged');
+  // A scope closed as completed stays on the chart, so its comment still needs it there.
+  Object.assign(f.issues.get(13), { state_reason: 'completed' });
+  assert.equal(await f.service.comment(f.comment(13)), 'drawn #10');
+  f.issues.set(14, issue(14, 'scope'));
+  f.api.parent = async () => f.issues.get(10);
+  await assert.rejects(f.service.comment(f.comment(14)), { code: 'relation' });
+});
 test('every run also aligns other open pitches with scopes, so a cancelled pending run loses nothing', async () => {
   const f = fixture();
   await f.service.comment(f.comment());

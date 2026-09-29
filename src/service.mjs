@@ -45,7 +45,8 @@ export class HillService {
     requireType(pitch, 'pitch', this.config);
     return pitch;
   }
-  // A new comment on a scope is the signal to reconcile.
+  // A new comment on a scope is the signal to reconcile. A scope closed as not planned has left the chart,
+  // so a comment on it, such as the reason scope drop posts, aligns its pitch without looking for it there.
   async comment(event) {
     if (event.action !== 'created' || !event.issue || event.issue.pull_request ||
         event.comment?.user?.type === 'Bot' ||
@@ -53,7 +54,8 @@ export class HillService {
     requireType(event.issue, 'scope', this.config);
     const pitch = await this.pitchOf(event.issue);
     if (!pitch) return 'no-pitch';
-    return this.reconcile(pitch, event.issue.number);
+    const dropped = event.issue.state === 'closed' && event.issue.state_reason === 'not_planned';
+    return this.reconcile(pitch, dropped ? undefined : event.issue.number);
   }
   // Opening, closing or reopening a scope changes which dots the chart shows.
   async lifecycle(event) {
