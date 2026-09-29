@@ -6,9 +6,10 @@ Run [Shape Up](https://basecamp.com/shapeup) on GitHub Issues and Projects.
   bets pitches on cycles, moves scopes on the hill, comments on every issue it changes with the reason or a completion report,
   and audits the board for drift.
   It installs as the gh extension `gh shapeup`.
-- A **GitHub Action** that draws each pitch's hill chart as an SVG and keeps it at the top of the pitch body.
+- A **hill chart Action** that draws each pitch's hill chart as an SVG and keeps it at the top of the pitch body.
+- A **board Action** that runs the cycle's commands from a workflow, such as after an agent's work, with the CLI's checks and refusals.
 
-Both read one config file that names your project, its fields and your templates.
+All three read one config file that names your project, its fields and your templates.
 The config holds names only: issues, statuses, cycles and hill positions are always read live from GitHub.
 
 ## How Shape Up maps onto GitHub
@@ -35,12 +36,14 @@ Every field, option and label name above is a default and can be renamed in the 
 3. **Issue templates.** Copy [`examples/ISSUE_TEMPLATE/`](examples/ISSUE_TEMPLATE) to `.github/ISSUE_TEMPLATE/`.
    A template needs front matter with `title` (the prefix, such as `"Pitch: "`) and `labels`,
    one `## ` section per CLI parameter of its kind, and the footnote markers.
-   The pitch template also carries the hill markers the Action writes between.
+   The pitch template also carries the hill markers the hill chart Action writes between.
 4. **Config.** Copy [`examples/shapeup.json`](examples/shapeup.json) to `.github/shapeup.json` and set your project.
    Its `$schema` line gives editors a description of every key; see [`config.schema.json`](config.schema.json).
 5. **Token.** Add a repository secret `SHAPEUP_PROJECT_TOKEN` that can read the project.
    For a user-owned project use a classic token with `read:project` and `repo`.
+   The [board Action](#board-action) changes the project, so its token needs more; see [Tokens](#tokens).
 6. **Workflow.** Copy [`examples/workflows/shapeup-hill.yml`](examples/workflows/shapeup-hill.yml) to `.github/workflows/`.
+   To change the board from a workflow, start from [`examples/workflows/shapeup-board.yml`](examples/workflows/shapeup-board.yml).
 7. **CLI.** Run `gh extension install vulpes33/gh-shapeup`.
    It is one binary for macOS, Linux or Windows that needs nothing but `gh`, and it uses your `gh` login.
    `gh extension upgrade shapeup` updates it.
@@ -81,7 +84,7 @@ gh shapeup init [--force]
   Every check that can refuse the command comes before its first change.
   A failed change posts nothing; a comment that fails after the change is reported, and the command exits with 2.
 - A command whose result already holds refuses, and one that stops part-way says what it made; see [State commands](#state-commands).
-- A comment on a scope wakes the Action, so the comment of every `scope` command wakes it; after `scope hill` that is what redraws the chart.
+- A comment on a scope wakes the hill chart Action, so the comment of every `scope` command wakes it; after `scope hill` that is what redraws the chart.
 - `init` creates the labels, the project and its fields that the config names, and leaves whatever already exists alone with a warning.
   With `--force` it brings them back to the config: labels get their color and description, options are set to the config's (an option with the same name keeps its id, so items keep their values), and a field of the wrong type is deleted with its values and created again.
   A project that `init` creates gets a new number; set it in the config.
@@ -197,13 +200,93 @@ The Action keeps this block at the top of each pitch body:
   Viewers of a private repository need to be signed in.
 - `workflow_dispatch` with an empty `pitch_number` redraws every open pitch that has scopes; with a number it redraws that pitch.
 
-## Action inputs
+## Hill chart Action inputs
 
 | Input | Default | Use |
 | --- | --- | --- |
 | `project-token` | none | Reads the project. Without it the Action only warns. |
 | `github-token` | `${{ github.token }}` | Commits the SVG and updates pitch bodies (`contents: write`, `issues: write`). |
 | `config` | `.github/shapeup.json` | Path of the config in the checked-out repository. |
+
+## Board Action
+
+`vulpes33/gh-shapeup/board@v1` runs one command of the cycle from a workflow, with the same checks and refusals as the CLI.
+It is meant for a job that runs after automated work, such as an agent's:
+that work never sees the project token, and hands over only values that the workflow passes in as inputs.
+See [`examples/workflows/shapeup-board.yml`](examples/workflows/shapeup-board.yml).
+
+| Command | Needs | Also takes |
+| --- | --- | --- |
+| `scope new` | `pitch`, `title`, `body` | |
+| `scope edit` | `number`, `reason` | `title`, `body`; at least one of them |
+| `scope start` | `number`, `reason` | |
+| `scope hill` | `number`, `position`, `reason` | |
+| `scope done` | `number`, `report` | |
+| `pitch done` | `number`, `report` | |
+| `bug new` | `title`, `body` | |
+
+Shaping, betting, the circuit breaker, cooldown work, bug edits and `init` are left to people on the CLI.
+
+- `body` is Markdown split into `## ` sections, as with `--from`: its headings name the kind's sections in the config, and anything else in it is left out.
+  `reason` is Markdown posted as it is, as with `--reason-file`, and `report` is a [completion report](#completion-reports), as with `--report-file`.
+  A refusal from the CLI names those parameters.
+- Every input is checked before the first call to GitHub, and no message repeats what an input holds.
+  A blank input counts as not given; an input the command needs must be given, and one it does not take must not.
+  `number` and `pitch` are issue numbers, `position` is an integer from 0 to 100, and `title` is one line of at most 256 characters.
+  `reason` holds at most 4,000 characters, `body` and `report` at most 65,536, and none holds a control character other than tab and newline.
+- A command whose result already holds changes nothing and posts nothing, as in the CLI, but ends with a notice instead of failing and sets `result` to `unchanged`.
+  A workflow that returns to an earlier station can then run the same step again.
+  Every other refusal fails the step before the first change.
+- A command that stops part-way fails with the CLI's message.
+  Running a state command again finishes it; running `scope new` or `bug new` again would create another issue.
+- After `scope new`, `scope hill` and `scope done`, the step aligns the chart of the scope's pitch, even when the result already held,
+  since a bot's comment does not wake the hill chart workflow.
+  When the chart cannot be drawn, the step warns and still succeeds; run the hill chart workflow by hand with the pitch number.
+- The step logs no token, no API response and none of the Markdown inputs.
+
+### Tokens
+
+The config's `projectOwnerType` says whether a user or an organization owns the project; the step does not guess it from the token.
+
+- `project-token` changes the project. It also reads the repository's issues, since an issue's project fields are read from the issue.
+  For a user's project it is a classic token with `project` and `repo`.
+  For an organization's project it is a GitHub App installation token with `organization_projects: write` and `issues: read` on the repository,
+  or a personal access token that can do the same.
+  `bug new` does not need it.
+- `github-token` creates, closes and comments on issues, commits the chart and updates the pitch body, so it needs `issues: write` and `contents: write`.
+  The comments are posted as its owner: `github-actions[bot]` by default, or your App with the App's token.
+- When the automated work runs as the same App, give its job a token without `organization_projects`,
+  for instance with the `permission-*` inputs of `actions/create-github-app-token`; an installation token otherwise carries every permission of the App.
+
+### Workflow
+
+- Name the command and the issue in the workflow, and take only the values from the work before it, through `with:`.
+  Never put `${{ }}` inside a `run:` script.
+- Check out the config and the templates from the default branch, never from a branch the work wrote.
+- End a multi-line output with a delimiter the work cannot guess, so its text cannot set another output.
+- Keep the board job out of the hill chart workflow's concurrency group: a pending job is cancelled when another joins its group,
+  and a cancelled board job loses its change.
+
+### Board Action inputs and outputs
+
+| Input | Default | Use |
+| --- | --- | --- |
+| `command` | none | One of the commands above. |
+| `number` | none | The issue the command changes. |
+| `pitch` | none | The pitch of a new scope. |
+| `title` | none | The title; the template's prefix is added once. |
+| `body` | none | The sections, as with `--from`. |
+| `position` | none | The hill position, from 0 to 100. |
+| `reason` | none | The reason, as with `--reason-file`. |
+| `report` | none | The completion report, as with `--report-file`. |
+| `project-token` | none | Changes the project; see [Tokens](#tokens). |
+| `github-token` | `${{ github.token }}` | Creates, closes and comments on issues, commits the chart and updates pitch bodies (`issues: write`, `contents: write`). |
+| `config` | `.github/shapeup.json` | Path of the config in the checked-out repository. |
+
+| Output | Value |
+| --- | --- |
+| `result` | `changed`, or `unchanged` when the result already held |
+| `number` | The issue the command changed, or the one `scope new` or `bug new` created |
 
 ## Development
 
