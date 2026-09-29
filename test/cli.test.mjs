@@ -339,6 +339,27 @@ test('main reads report templates under the repository root, never from the issu
   await mkdir(join(github, 'shapeup', 'scope-report.md'));
   await assert.rejects(run(), { code: 'template', message: 'Cannot read the report template .github/shapeup/scope-report.md.' });
 });
+test('main uses SHAPEUP_PROJECT_TOKEN for the project when it is set, and the one token for everything otherwise', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'shapeup-'));
+  await mkdir(join(root, '.github', 'ISSUE_TEMPLATE'), { recursive: true });
+  await writeFile(join(root, '.github', 'shapeup.json'), JSON.stringify({ projectOwner: 'octocat', projectOwnerType: 'user', projectNumber: 1 }));
+  await writeFile(join(root, '.github', 'ISSUE_TEMPLATE', 'bug.md'), readFileSync('examples/ISSUE_TEMPLATE/bug.md', 'utf8'));
+  const seen = [];
+  const original = globalThis.fetch;
+  // Every request fails, so each command stops at its first call: the project for scope start, an issue for bug new.
+  globalThis.fetch = async (url, options) => { seen.push([new URL(url).pathname, options.headers.Authorization]); return new Response('{}', { status: 500 }); };
+  try {
+    for (const [env, project] of [[{ SHAPEUP_PROJECT_TOKEN: 'project-token' }, 'project-token'], [{ SHAPEUP_PROJECT_TOKEN: '' }, 'gh-token'], [{}, 'gh-token']]) {
+      seen.length = 0;
+      const run = argv => main(argv, { GH_TOKEN: 'gh-token', SHAPEUP_REPOSITORY: 'o/r', ...env }, root);
+      await assert.rejects(run(['scope', 'start', '11', '--reason', 'x']), { code: 'api' });
+      await assert.rejects(run(['bug', 'new', '--title', 'T', '--symptom', 's', '--steps', '1', '--expected', 'e']), { code: 'api' });
+      assert.deepEqual(seen, [['/graphql', `Bearer ${project}`], ['/repos/o/r/issues', 'Bearer gh-token']], JSON.stringify(env));
+    }
+  } finally {
+    globalThis.fetch = original;
+  }
+});
 test('report templates are read from their own path next to the config, never from the issue templates', async () => {
   for (const [[argv, , prepare], path] of [[finishes[0], '.github/shapeup/pitch-report.md'], [finishes[1], '.github/shapeup/scope-report.md']]) {
     const f = fixture();

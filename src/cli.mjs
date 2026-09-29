@@ -467,14 +467,14 @@ export async function credentials(env, run = runGh) {
 // A report template's path is relative to the repository root; templateDir holds only the issue templates.
 export const reportTemplateReader = root => path => readFile(resolve(root, path), 'utf8');
 
-// The token never comes from the command line.
+// The token never comes from the command line. SHAPEUP_PROJECT_TOKEN, when set, is the one for the project.
 export async function main(argv = process.argv.slice(2), env = process.env, cwd = process.cwd()) {
   const args = parseArgs(argv);
   if (!args.kind || args.kind === 'help') { console.log(usage); return 0; }
   const root = env.SHAPEUP_CONFIG ? cwd : await findRoot(cwd);
   const config = await loadConfig(env.SHAPEUP_CONFIG || join(root, defaultConfigPath));
   const { token, repository } = await credentials(env);
-  const api = new GitHub({ repository, repositoryToken: token, projectToken: token });
+  const api = new GitHub({ repository, repositoryToken: token, projectToken: env.SHAPEUP_PROJECT_TOKEN || token });
   const cli = new Cli({ api, board: new Board(api, config), config,
     readTemplate: name => readFile(resolve(root, config.templateDir, name), 'utf8'),
     readReportTemplate: reportTemplateReader(root) });

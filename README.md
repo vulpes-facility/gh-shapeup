@@ -88,6 +88,7 @@ gh shapeup init [--force]
 - `audit` reports scopes without a pitch, items missing from the board, empty or contradictory statuses, cycles that differ from the pitch, and charts that no longer match the board. It exits with 1 when it finds something.
 
 The CLI asks `gh` for the token and the repository; `GH_TOKEN` and `SHAPEUP_REPOSITORY` override them.
+When `SHAPEUP_PROJECT_TOKEN` is set, the CLI uses it for the project and the other token for everything else.
 It reads `.github/shapeup.json` from the nearest directory at or above the working directory,
 so it runs from anywhere in the repository (override the path with `SHAPEUP_CONFIG`).
 
