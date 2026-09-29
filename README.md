@@ -81,6 +81,7 @@ gh shapeup init [--force]
   Without one, with both, or with an empty one, the command changes nothing and exits with 2.
 - The command makes its change first and then posts the reason or the report as one comment on the issue it names, with nothing added.
   `pitch bet`, `unbet` and `break` also change the pitch's scopes, but comment only on the pitch.
+  `scope start` also sets its pitch In progress when the pitch is Bet, but comments only on the scope.
   Every check that can refuse the command comes before its first change.
   A failed change posts nothing; a comment that fails after the change is reported, and the command exits with 2.
 - A command whose result already holds refuses, and one that stops part-way says what it made; see [State commands](#state-commands).
@@ -104,6 +105,7 @@ A finished scope is never reopened: the work that follows it is a new scope, mad
 A done scope that did not reach the top of the hill may still be moved to 100.
 A scope is worked on only while its pitch is bet: `scope start` and `scope hill` refuse a scope without a pitch,
 and one whose pitch is finished or is neither Bet nor In progress.
+A pitch that is Bet goes In progress when the first of its scopes starts.
 
 | Command | Refuses when |
 | --- | --- |
@@ -111,7 +113,7 @@ and one whose pitch is finished or is neither Bet nor In progress.
 | `pitch unbet` | the pitch is finished, or it and its unfinished scopes are already Shaped with no cycle |
 | `pitch break` | the pitch is done, or it and its scopes that are not done are already closed as not planned and Dropped |
 | `pitch done` | the pitch was dropped, is already closed as completed and Done, or has an open scope |
-| `scope start` | the scope is finished; it has no pitch, or its pitch is finished or neither Bet nor In progress; or the scope is already In progress |
+| `scope start` | the scope is finished; it has no pitch, or its pitch is finished or neither Bet nor In progress; or the scope and its pitch are both already In progress |
 | `scope hill` | the scope was dropped, or is done and the position is not 100; it has no pitch, or its pitch is finished or neither Bet nor In progress; or the scope is already at the position (empty counts as 0) |
 | `scope done` | the scope was dropped, or is already closed as completed and Done |
 | `scope new` | the pitch is finished |

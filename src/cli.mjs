@@ -423,11 +423,15 @@ export class Cli {
       const scope = await this.boardIssue(args.number, 'scope');
       const ending = this.ending(scope);
       if (ending) throw new ShapeUpError('input', `#${scope.number} is finished (${ending.how}) and is not started again. ${this.newScopeHint(scope)}`);
-      await this.workingPitch(scope, 'start');
-      if (scope.item.status === s.doing) throw holds(`#${scope.number} is already ${s.doing}.`);
+      const pitch = await this.workingPitch(scope, 'start');
       this.requireStatus('doing');
-      await this.apply(`scope start #${scope.number}`, [step(set(scope.number, c.statusField, s.doing), () => this.board.setStatus(scope.item.id, 'doing'))], { note });
-      return changed(scope.number, `#${scope.number} ${s.doing}`);
+      // A pitch that is Bet goes In progress with the first scope that starts; the reason is posted on the scope alone.
+      const steps = [];
+      if (scope.item.status !== s.doing) steps.push(step(set(scope.number, c.statusField, s.doing), () => this.board.setStatus(scope.item.id, 'doing')));
+      if (pitch.item.status === s.bet) steps.push(step(set(pitch.number, c.statusField, s.doing), () => this.board.setStatus(pitch.item.id, 'doing')));
+      if (!steps.length) throw holds(`#${scope.number} is already ${s.doing}.`);
+      await this.apply(`scope start #${scope.number}`, steps, { note });
+      return changed(scope.number, `#${scope.number} ${s.doing}${pitch.item.status === s.bet ? `, and its pitch #${pitch.number}` : ''}`);
     }
     if (kind === 'scope' && action === 'hill') {
       const scope = await this.boardIssue(args.number, 'scope');
