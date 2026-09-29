@@ -39,6 +39,6 @@ jobs:
           sparse-checkout: .github/shapeup.json
           sparse-checkout-cone-mode: false
           persist-credentials: false
-      - uses: vulpes33/gh-shapeup@v1
+      - uses: vulpes-facility/gh-shapeup@v1
         with:
           project-token: ${{ secrets.SHAPEUP_PROJECT_TOKEN }}

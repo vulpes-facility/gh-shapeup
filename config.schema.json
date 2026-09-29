@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/vulpes33/gh-shapeup/v1/config.schema.json",
+  "$id": "https://raw.githubusercontent.com/vulpes-facility/gh-shapeup/v1/config.schema.json",
   "title": "gh-shapeup config",
   "description": "Tells the gh-shapeup CLI and Action where the GitHub Project is and what its fields, options, labels and templates are called. It holds names only: issues, statuses, cycles and hill positions are always read live from GitHub, and field and option ids are looked up by these names on every run.",
   "type": "object",

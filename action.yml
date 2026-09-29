@@ -1,6 +1,6 @@
 name: gh-shapeup
 description: Draws each pitch's hill chart from its scopes' Hill Position and keeps it in the pitch body.
-author: vulpes33
+author: vulpes-facility
 branding:
   icon: trending-up
   color: green

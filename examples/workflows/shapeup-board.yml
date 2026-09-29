@@ -73,7 +73,7 @@ jobs:
       # and then project-token: ${{ steps.app.outputs.token }} below.
       # The workflow names the command and the issue; only the values come from the station, and only through with.
       - id: hill
-        uses: vulpes33/gh-shapeup/board@v1
+        uses: vulpes-facility/gh-shapeup/board@v1
         with:
           command: scope hill
           number: ${{ inputs.scope }}
@@ -82,7 +82,7 @@ jobs:
           project-token: ${{ secrets.SHAPEUP_PROJECT_TOKEN }}
       # A bug the station found outside its scope goes to the backlog. bug new needs no project token.
       - if: needs.station.outputs.bug-title != ''
-        uses: vulpes33/gh-shapeup/board@v1
+        uses: vulpes-facility/gh-shapeup/board@v1
         with:
           command: bug new
           title: ${{ needs.station.outputs.bug-title }}

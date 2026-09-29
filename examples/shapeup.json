@@ -1,5 +1,5 @@
 {
-  "$schema": "https://raw.githubusercontent.com/vulpes33/gh-shapeup/v1/config.schema.json",
+  "$schema": "https://raw.githubusercontent.com/vulpes-facility/gh-shapeup/v1/config.schema.json",
   "projectOwner": "octocat",
   "projectOwnerType": "user",
   "projectNumber": 1,
