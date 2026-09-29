@@ -1,0 +1,55 @@
+name: gh-shapeup board
+description: Runs one command of the cycle on the board with the CLI's checks and refusals, and redraws the hill chart it changes.
+author: vulpes33
+inputs:
+  command:
+    description: 'One of: scope new, scope edit, scope start, scope hill, scope done, pitch done, bug new.'
+    required: true
+  number:
+    description: The issue the command changes. Not for scope new and bug new.
+    required: false
+    default: ''
+  pitch:
+    description: The pitch that a new scope belongs to. Only for scope new.
+    required: false
+    default: ''
+  title:
+    description: The issue title, for new and edit. The template's prefix is added once.
+    required: false
+    default: ''
+  body:
+    description: Markdown split into ## sections named as the config's kinds say, like the CLI's --from. For new and edit.
+    required: false
+    default: ''
+  position:
+    description: The hill position, an integer from 0 to 100. Only for scope hill.
+    required: false
+    default: ''
+  reason:
+    description: The reason as Markdown, posted as it is on the issue, like the CLI's --reason-file. For scope edit, scope start and scope hill.
+    required: false
+    default: ''
+  report:
+    description: The completion report for scope done and pitch done, like the CLI's --report-file.
+    required: false
+    default: ''
+  project-token:
+    description: A token that can change the GitHub Project and read the repository's issues. Every command but bug new needs it.
+    required: false
+    default: ''
+  github-token:
+    description: Creates, closes and comments on issues, commits the hill chart and updates pitch bodies (issues:write, contents:write). Comments are posted as its owner.
+    required: false
+    default: ${{ github.token }}
+  config:
+    description: Path of the config file in the checked-out repository.
+    required: false
+    default: .github/shapeup.json
+outputs:
+  result:
+    description: changed, or unchanged when the result already held.
+  number:
+    description: The issue the command changed or created.
+runs:
+  using: node24
+  main: main.mjs

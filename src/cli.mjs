@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import { audit } from './audit.mjs';
 import { Board } from './board.mjs';
 import { defaultConfigPath, loadConfig } from './config.mjs';
-import { ShapeUpError, requirePosition } from './domain.mjs';
+import { ShapeUpError, parsePosition } from './domain.mjs';
 import { GitHub } from './github.mjs';
 import { Init } from './init.mjs';
 import { checkReport, composeBody, editBody, footnoteValues, loadReport, loadTemplate, sectionValues, titleFor } from './templates.mjs';
@@ -416,9 +416,7 @@ export class Cli {
     }
     if (kind === 'scope' && action === 'hill') {
       const scope = await this.boardIssue(args.number, 'scope');
-      const raw = need(args.options.position, '--position is required.');
-      if (!/^[0-9]{1,3}$/.test(raw)) throw new ShapeUpError('position', 'Hill Position must be an integer from 0 to 100.');
-      const position = requirePosition(Number(raw));
+      const position = parsePosition(need(args.options.position, '--position is required.'));
       // A done scope may still be moved to the top of the hill, where it belongs; nothing else moves a finished scope.
       const ending = this.ending(scope);
       if (ending && !ending.done) throw new ShapeUpError('input', `#${scope.number} was dropped (${ending.how}), so its hill position stays. ${this.newScopeHint(scope)}`);
@@ -464,7 +462,9 @@ export async function credentials(env, run = runGh) {
   return { token, repository };
 }
 
-// A report template's path is relative to the repository root; templateDir holds only the issue templates.
+// Issue templates are read from templateDir. A report template's path is relative to the repository root;
+// templateDir holds only the issue templates.
+export const templateReader = (root, config) => name => readFile(resolve(root, config.templateDir, name), 'utf8');
 export const reportTemplateReader = root => path => readFile(resolve(root, path), 'utf8');
 
 // The token never comes from the command line. SHAPEUP_PROJECT_TOKEN, when set, is the one for the project.
@@ -476,8 +476,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, cwd 
   const { token, repository } = await credentials(env);
   const api = new GitHub({ repository, repositoryToken: token, projectToken: env.SHAPEUP_PROJECT_TOKEN || token });
   const cli = new Cli({ api, board: new Board(api, config), config,
-    readTemplate: name => readFile(resolve(root, config.templateDir, name), 'utf8'),
-    readReportTemplate: reportTemplateReader(root) });
+    readTemplate: templateReader(root, config), readReportTemplate: reportTemplateReader(root) });
   const result = await cli.run(args);
   return Array.isArray(result) && result.length ? 1 : 0;
 }

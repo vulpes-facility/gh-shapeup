@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { badgeLabel, chartUrl, drawnValues, escapeXml, hillBlock, pointAt, positionOf, renderHill, sameValues, withHill } from '../src/domain.mjs';
+import { badgeLabel, chartUrl, drawnValues, escapeXml, hillBlock, parsePosition, pointAt, positionOf, renderHill, sameValues, withHill } from '../src/domain.mjs';
 
 const template = '<!-- guidance -->\n\n<!-- hill:start -->\n<!-- ![Hill chart](https://github.com/owner/repo/blob/generated/shapeup/hills/pitch-<number>.svg?raw=true&v=<commit>) -->\n<!-- hill:end -->\n\n## Problem\n\nBody';
 
@@ -9,6 +9,10 @@ test('empty Hill Position counts as 0; out of range fails', () => {
   assert.equal(positionOf(undefined), 0);
   assert.equal(positionOf(35), 35);
   for (const value of [-1, 101, 20.5]) assert.throws(() => positionOf(value), { code: 'position' });
+});
+test('a position given as text is an integer from 0 to 100', () => {
+  for (const [text, value] of [['0', 0], ['45', 45], ['100', 100], ['007', 7]]) assert.equal(parsePosition(text), value);
+  for (const text of ['', '-1', '101', '1000', '4.5', '1e2', ' 5', 'abc']) assert.throws(() => parsePosition(text), { code: 'position' }, text);
 });
 test('curve endpoints and peak of the normal curve', () => {
   assert.deepEqual(pointAt(0), { x: 80, y: 342 });

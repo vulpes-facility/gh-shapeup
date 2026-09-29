@@ -87,6 +87,15 @@ export class HillService {
     if (failures.length) throw new ShapeUpError('reconcile', `Could not align other pitches: ${failures.map(f => `#${f.number} (${f.code})`).join(', ')}. Run a manual rebuild.`);
     return drawn.length ? `drawn ${drawn.map(number => `#${number}`).join(' ')}` : 'unchanged';
   }
+  // Aligns one pitch, named by its number or by one of its scopes. The board Action calls it after its change,
+  // since the comment it posts as a bot does not wake the hill chart workflow.
+  async redraw(number, type) {
+    const pitch = type === 'scope' ? await this.pitchOf({ number }) : await this.api.issue(number);
+    if (!pitch) return 'no-pitch';
+    requireType(pitch, 'pitch', this.config);
+    await this.initialize();
+    return await this.align(pitch, await this.scopes(pitch)) ? `drawn #${pitch.number}` : 'unchanged';
+  }
   // Draws only when the board no longer matches the values last drawn in the pitch body.
   async align(pitch, scopes) {
     if (sameValues(drawnValues(pitch.body), scopes)) return false;
