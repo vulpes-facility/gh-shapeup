@@ -137,7 +137,7 @@ test('each command runs through the CLI, posts its Markdown as given, and aligns
       assert.deepEqual(comments(f), [['/issues/11/comments', 'Clearer.']]);
     }],
     ['scope start', 11, [], f => {
-      assert.deepEqual(f.calls.filter(c => c[0] === 'status'), [['status', 'I11', 'doing']]);
+      assert.deepEqual(f.calls.filter(c => c[0] === 'status'), [['status', 'I11', 'doing'], ['status', 'I10', 'doing']]);
       assert.deepEqual(comments(f), [['/issues/11/comments', 'Started.']]);
     }],
     ['scope hill', 11, [[11, 'scope']], f => {
@@ -170,7 +170,8 @@ test('each command runs through the CLI, posts its Markdown as given, and aligns
 
 test('a result that already holds is a notice: nothing changes, nothing is posted, and the chart is still aligned', async () => {
   for (const [values, redraws, message, prepare] of [
-    [input('scope start', { number: '12' }), [], '#12 is already In progress. Nothing changed, and the reason was not posted.'],
+    [input('scope start', { number: '12' }), [], '#12 is already In progress. Nothing changed, and the reason was not posted.',
+      f => { f.issues.get(10).item.status = s.doing; }],
     [input('scope hill', { position: '30' }), [[11, 'scope']], '#11 is already at 30 on the hill. Nothing changed, and the reason was not posted.'],
     [input('scope done'), [[11, 'scope']], '#11 is already done: closed as completed and Done. Nothing changed, and the report was not posted.',
       f => { Object.assign(f.issues.get(11), { state: 'closed', stateReason: 'completed' }); f.issues.get(11).item.status = s.done; }],
@@ -187,6 +188,7 @@ test('any other refusal fails the step before any change, and leaves the chart a
   for (const [values, code, message, prepare] of [
     [input('scope start'), 'input', /^#11 is finished \(Done\) and is not started again\./, f => { f.issues.get(11).item.status = s.done; }],
     [input('scope hill', { number: '10' }), 'type', '#10 is not a scope issue.'],
+    [input('scope start'), 'input', /^#11 cannot start: its pitch #10 is Shaped,/, f => { f.issues.get(10).item.status = s.shaped; }],
     [input('scope hill'), 'input', /^#11 was dropped \(Dropped\), so its hill position stays\./, f => { f.issues.get(11).item.status = s.dropped; }],
     [input('scope new', { body: '## Notes\n\nNo section the config names.\n' }), 'input', 'Missing sections: --done'],
     [input('scope done', { report: reports.scope.replace('## Evidence', '## Proof') }), 'input', /^The report has no "## Evidence" section\./],

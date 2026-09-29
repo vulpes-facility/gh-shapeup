@@ -191,6 +191,20 @@ export class Cli {
     const sections = this.spec('scope').required.map(param => ` --${param} …`).join('');
     return `Work that follows a finished scope is a new scope: gh shapeup scope new --pitch ${scope.parent ?? '<number>'} --title …${sections}.`;
   }
+  // A scope is worked on only while its pitch is bet: Bet or In progress, and not finished.
+  async workingPitch(scope, verb) {
+    const s = this.config.statuses;
+    const refuse = why => new ShapeUpError('input', `#${scope.number} cannot ${verb}: ${why}`);
+    if (scope.parent === null) throw refuse('it has no parent pitch. Link it as a sub-issue of its pitch first.');
+    const pitch = await this.boardIssue(scope.parent, 'pitch');
+    const ending = this.ending(pitch);
+    if (ending) throw refuse(`its pitch #${pitch.number} is finished (${ending.how}).`);
+    if (![s.bet, s.doing].includes(pitch.item.status)) {
+      const now = pitch.item.status ? `is ${pitch.item.status}` : `has no ${this.config.statusField}`;
+      throw refuse(`its pitch #${pitch.number} ${now}, and a scope is worked on only while its pitch is ${s.bet} or ${s.doing}.`);
+    }
+    return pitch;
+  }
   // Makes a command's changes in order. Nothing is rolled back: when a change fails after an earlier one was made, the
   // error lists what was made, what failed, what was not attempted and how to finish, and no comment is posted.
   // again says what running the command again does; an edit sends the same edit again.
@@ -409,10 +423,15 @@ export class Cli {
       const scope = await this.boardIssue(args.number, 'scope');
       const ending = this.ending(scope);
       if (ending) throw new ShapeUpError('input', `#${scope.number} is finished (${ending.how}) and is not started again. ${this.newScopeHint(scope)}`);
-      if (scope.item.status === s.doing) throw holds(`#${scope.number} is already ${s.doing}.`);
+      const pitch = await this.workingPitch(scope, 'start');
       this.requireStatus('doing');
-      await this.apply(`scope start #${scope.number}`, [step(set(scope.number, c.statusField, s.doing), () => this.board.setStatus(scope.item.id, 'doing'))], { note });
-      return changed(scope.number, `#${scope.number} ${s.doing}`);
+      // A pitch that is Bet goes In progress with the first scope that starts; the reason is posted on the scope alone.
+      const steps = [];
+      if (scope.item.status !== s.doing) steps.push(step(set(scope.number, c.statusField, s.doing), () => this.board.setStatus(scope.item.id, 'doing')));
+      if (pitch.item.status === s.bet) steps.push(step(set(pitch.number, c.statusField, s.doing), () => this.board.setStatus(pitch.item.id, 'doing')));
+      if (!steps.length) throw holds(`#${scope.number} is already ${s.doing}.`);
+      await this.apply(`scope start #${scope.number}`, steps, { note });
+      return changed(scope.number, `#${scope.number} ${s.doing}${pitch.item.status === s.bet ? `, and its pitch #${pitch.number}` : ''}`);
     }
     if (kind === 'scope' && action === 'hill') {
       const scope = await this.boardIssue(args.number, 'scope');
@@ -421,6 +440,7 @@ export class Cli {
       const ending = this.ending(scope);
       if (ending && !ending.done) throw new ShapeUpError('input', `#${scope.number} was dropped (${ending.how}), so its hill position stays. ${this.newScopeHint(scope)}`);
       if (ending && position !== 100) throw new ShapeUpError('input', `#${scope.number} is done (${ending.how}), so it moves only to 100 on the hill. ${this.newScopeHint(scope)}`);
+      await this.workingPitch(scope, 'move on the hill');
       if ((scope.item.hill ?? 0) === position) throw holds(`#${scope.number} is already at ${position} on the hill.`);
       await this.apply(`scope hill #${scope.number}`, [step(set(scope.number, c.hillField, position), () => this.board.setHill(scope.item.id, position))], { note });
       // The reason comment is also the hill chart Action's trigger, so it must follow the field change.

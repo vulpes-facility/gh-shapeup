@@ -360,7 +360,7 @@ test('a state command whose result already holds, or that would reopen a finishe
     [closed(11, 'completed', s.done), f => ['scope', 'done', '11', ...scopeReport(f)], '#11 is already done: closed as completed and Done.'],
     [closed(11, 'not_planned', s.dropped), f => ['scope', 'done', '11', ...scopeReport(f)], `#11 was dropped (closed as not planned); a dropped scope is not done. ${hint}`],
     [status(11, s.dropped), f => ['scope', 'done', '11', ...scopeReport(f)], `#11 was dropped (Dropped); a dropped scope is not done. ${hint}`],
-    [() => {}, () => ['scope', 'start', '12', '--reason', 'x'], '#12 is already In progress.'],
+    [status(10, s.doing), () => ['scope', 'start', '12', '--reason', 'x'], '#12 is already In progress.'],
     [closed(11, 'completed', s.done), () => ['scope', 'start', '11', '--reason', 'x'], `#11 is finished (closed as completed) and is not started again. ${hint}`],
     [status(11, s.done), () => ['scope', 'start', '11', '--reason', 'x'], `#11 is finished (Done) and is not started again. ${hint}`],
     [status(11, s.dropped), () => ['scope', 'start', '11', '--reason', 'x'], `#11 is finished (Dropped) and is not started again. ${hint}`],
@@ -405,6 +405,65 @@ test('a done scope that did not reach the top of the hill can still be moved to 
     assert.match(f.out.at(-1), /30 → 100/);
   }
 });
+test('a scope starts and moves on the hill only while its pitch is Bet or In progress', async () => {
+  const pitch = (status, extra = {}) => f => { Object.assign(f.issues.get(10), extra); f.issues.get(10).item.status = status; };
+  const commands = [[['scope', 'start', '11', '--reason', 'x'], 'start'], [['scope', 'hill', '11', '--position', '60', '--reason', 'x'], 'move on the hill']];
+  for (const [prepare, why] of [
+    [pitch(s.shaped), 'its pitch #10 is Shaped, and a scope is worked on only while its pitch is Bet or In progress.'],
+    [pitch(null), 'its pitch #10 has no Status, and a scope is worked on only while its pitch is Bet or In progress.'],
+    [pitch(s.done), 'its pitch #10 is finished (Done).'],
+    [pitch(s.dropped), 'its pitch #10 is finished (Dropped).'],
+    [pitch(s.bet, { state: 'closed', stateReason: 'completed' }), 'its pitch #10 is finished (closed as completed).'],
+    [f => { f.issues.get(11).parent = null; }, 'it has no parent pitch. Link it as a sub-issue of its pitch first.'],
+  ]) {
+    for (const [argv, verb] of commands) {
+      const f = fixture();
+      prepare(f);
+      await assert.rejects(f.run(argv), { code: 'input', message: `#11 cannot ${verb}: ${why}` }, `${verb}: ${why}`);
+      assert.deepEqual(f.calls.filter(c => c[0] !== 'load'), [], `${verb}: ${why}`);
+    }
+  }
+  for (const [argv] of commands) {
+    const f = fixture();
+    f.issues.get(10).item = null;
+    await assert.rejects(f.run(argv), { code: 'item', message: '#10 is not on the board. Check it with audit.' });
+    const g = fixture();
+    g.issues.get(11).parent = 20;
+    await assert.rejects(g.run(argv), { code: 'type', message: '#20 is not a pitch issue.' });
+  }
+  // A scope whose pitch is not bet refuses even when its own result already holds.
+  const h = fixture();
+  pitch(s.shaped)(h);
+  await assert.rejects(h.run(['scope', 'start', '12', '--reason', 'x']), { code: 'input', message: /^#12 cannot start: its pitch #10 is Shaped/ });
+  for (const status of [s.bet, s.doing]) {
+    for (const [argv] of commands) {
+      const f = fixture();
+      pitch(status)(f);
+      await f.run(argv);
+      assert.equal(f.calls.at(-1)[2], '/issues/11/comments', `${status} ${argv[1]}`);
+    }
+  }
+});
+test('scope start sets a pitch that is Bet In progress with it, and posts the reason on the scope alone', async () => {
+  const f = fixture();
+  await f.run(['scope', 'start', '11', '--reason', 'Started.']);
+  assert.deepEqual(f.calls.filter(c => c[0] !== 'load').map(c => c.slice(0, 3)),
+    [['status', 'I11', 'doing'], ['status', 'I10', 'doing'], ['rest', 'POST', '/issues/11/comments']]);
+  assert.equal(f.out.at(-1), '#11 In progress, and its pitch #10');
+  // Once the pitch is In progress, the next scope that starts leaves it as it is.
+  f.issues.get(12).item.status = s.bet;
+  await f.run(['scope', 'start', '12', '--reason', 'Started too.']);
+  assert.deepEqual(f.calls.filter(c => c[0] === 'status').slice(2), [['status', 'I12', 'doing']]);
+  assert.equal(f.out.at(-1), '#12 In progress');
+  // A scope already In progress under a pitch that is still Bet sets only the pitch, and still posts the reason on the scope.
+  const g = fixture();
+  await g.run(['scope', 'start', '12', '--reason', 'Picked up again.']);
+  assert.deepEqual(g.calls.filter(c => c[0] !== 'load').map(c => c.slice(0, 3)), [['status', 'I10', 'doing'], ['rest', 'POST', '/issues/12/comments']]);
+  // scope hill never moves the pitch.
+  const h = fixture();
+  await h.run(['scope', 'hill', '11', '--position', '60', '--reason', 'Moving.']);
+  assert.equal(h.issues.get(10).item.status, s.bet);
+});
 test('a finished scope keeps its state when its pitch is bet, unbet or broken, and only unfinished scopes follow', async () => {
   const f = fixture();
   finishedScope(f);
@@ -444,6 +503,9 @@ test('a command that fails after its first change reports what was made and what
     ['pitch done', closeScopes, 'status I10', f => ['pitch', 'done', '10', ...pitchReport(f)],
       partial('pitch done #10', ['close #10 as completed'], `set Status of #10 to Done: ${graphqlFailed}`, [], 'report'),
       f => f.issues.get(10).state === 'closed' && f.issues.get(10).item.status === s.done],
+    ['scope start', () => {}, 'status I10', () => ['scope', 'start', '11', '--reason', 'Started.'],
+      partial('scope start #11', ['set Status of #11 to In progress'], `set Status of #10 to In progress: ${graphqlFailed}`, [], 'reason'),
+      f => [10, 11].every(n => f.issues.get(n).item.status === s.doing)],
     ['scope done', () => {}, 'status I11', f => ['scope', 'done', '11', ...scopeReport(f)],
       partial('scope done #11', ['close #11 as completed'], `set Status of #11 to Done: ${graphqlFailed}`, [], 'report'),
       f => f.issues.get(11).state === 'closed' && f.issues.get(11).item.status === s.done],
@@ -539,7 +601,7 @@ test('a comment that fails after the change says so', async () => {
   f.failing.add('POST /issues/11/comments');
   await assert.rejects(f.run(['scope', 'start', '11', '--reason', 'Started.']), {
     code: 'comment', message: /^#11 was changed, but its reason comment failed: GitHub API request failed \(HTTP 500\)\. Post the reason on #11 by hand\.$/ });
-  assert.deepEqual(f.calls.filter(c => c[0] === 'status'), [['status', 'I11', 'doing']]);
+  assert.deepEqual(f.calls.filter(c => c[0] === 'status'), [['status', 'I11', 'doing'], ['status', 'I10', 'doing']]);
   assert.deepEqual(f.out, []);
   f.failing.add('POST /issues/11/comments');
   f.files.set('report.md', reports.scope);
