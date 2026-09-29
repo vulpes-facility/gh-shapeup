@@ -405,6 +405,45 @@ test('a done scope that did not reach the top of the hill can still be moved to 
     assert.match(f.out.at(-1), /30 → 100/);
   }
 });
+test('a scope starts and moves on the hill only while its pitch is Bet or In progress', async () => {
+  const pitch = (status, extra = {}) => f => { Object.assign(f.issues.get(10), extra); f.issues.get(10).item.status = status; };
+  const commands = [[['scope', 'start', '11', '--reason', 'x'], 'start'], [['scope', 'hill', '11', '--position', '60', '--reason', 'x'], 'move on the hill']];
+  for (const [prepare, why] of [
+    [pitch(s.shaped), 'its pitch #10 is Shaped, and a scope is worked on only while its pitch is Bet or In progress.'],
+    [pitch(null), 'its pitch #10 has no Status, and a scope is worked on only while its pitch is Bet or In progress.'],
+    [pitch(s.done), 'its pitch #10 is finished (Done).'],
+    [pitch(s.dropped), 'its pitch #10 is finished (Dropped).'],
+    [pitch(s.bet, { state: 'closed', stateReason: 'completed' }), 'its pitch #10 is finished (closed as completed).'],
+    [f => { f.issues.get(11).parent = null; }, 'it has no parent pitch. Link it as a sub-issue of its pitch first.'],
+  ]) {
+    for (const [argv, verb] of commands) {
+      const f = fixture();
+      prepare(f);
+      await assert.rejects(f.run(argv), { code: 'input', message: `#11 cannot ${verb}: ${why}` }, `${verb}: ${why}`);
+      assert.deepEqual(f.calls.filter(c => c[0] !== 'load'), [], `${verb}: ${why}`);
+    }
+  }
+  for (const [argv] of commands) {
+    const f = fixture();
+    f.issues.get(10).item = null;
+    await assert.rejects(f.run(argv), { code: 'item', message: '#10 is not on the board. Check it with audit.' });
+    const g = fixture();
+    g.issues.get(11).parent = 20;
+    await assert.rejects(g.run(argv), { code: 'type', message: '#20 is not a pitch issue.' });
+  }
+  // A scope whose pitch is not bet refuses even when its own result already holds.
+  const h = fixture();
+  pitch(s.shaped)(h);
+  await assert.rejects(h.run(['scope', 'start', '12', '--reason', 'x']), { code: 'input', message: /^#12 cannot start: its pitch #10 is Shaped/ });
+  for (const status of [s.bet, s.doing]) {
+    for (const [argv] of commands) {
+      const f = fixture();
+      pitch(status)(f);
+      await f.run(argv);
+      assert.equal(f.calls.at(-1)[2], '/issues/11/comments', `${status} ${argv[1]}`);
+    }
+  }
+});
 test('a finished scope keeps its state when its pitch is bet, unbet or broken, and only unfinished scopes follow', async () => {
   const f = fixture();
   finishedScope(f);
