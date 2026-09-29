@@ -34,7 +34,7 @@ inputs:
     required: false
     default: ''
   project-token:
-    description: A token that can change the GitHub Project and read the repository's issues. Every command but bug new needs it.
+    description: A token that can change the GitHub Project and read the repository's issues - a classic token of the owner for a user's project, or a GitHub App's token for an organization's. Every command but bug new needs it.
     required: false
     default: ''
   github-token:

@@ -41,9 +41,9 @@ Every field, option and label name above is a default and can be renamed in the 
    The pitch template also carries the hill markers the hill chart Action writes between.
 4. **Config.** Copy [`examples/shapeup.json`](examples/shapeup.json) to `.github/shapeup.json` and set your project.
    Its `$schema` line gives editors a description of every key; see [`config.schema.json`](config.schema.json).
-5. **Token.** Add a repository secret `SHAPEUP_PROJECT_TOKEN` that can read the project.
-   For a user-owned project use a classic token with `read:project` and `repo`.
-   The [board Action](#board-action) changes the project, so its token needs more; see [Tokens](#tokens).
+5. **Token.** The Actions reach the project with a credential of their own; see [Tokens](#tokens).
+   For a user-owned project, add a repository secret `SHAPEUP_PROJECT_TOKEN` with a classic token of the owner that has `project` and `repo`.
+   For an organization's project, add a variable `SHAPEUP_APP_CLIENT_ID` and a secret `SHAPEUP_APP_PRIVATE_KEY` of a GitHub App.
 6. **Workflow.** Copy [`examples/workflows/shapeup-hill.yml`](examples/workflows/shapeup-hill.yml) to `.github/workflows/`.
    To change the board from a workflow, start from [`examples/workflows/shapeup-board.yml`](examples/workflows/shapeup-board.yml).
 7. **CLI.** Run `gh extension install vulpes-facility/gh-shapeup`.
@@ -97,6 +97,7 @@ gh shapeup init [--force]
 - `audit` reports scopes without a pitch, items missing from the board, empty or contradictory statuses, cycles that differ from the pitch, and charts that no longer match the board. It exits with 1 when it finds something.
 
 The CLI asks `gh` for the token and the repository; `GH_TOKEN` and `SHAPEUP_REPOSITORY` override them.
+The token needs the `project` scope, which `gh auth refresh -s project` adds.
 When `SHAPEUP_PROJECT_TOKEN` is set, the CLI uses it for the project and the other token for everything else.
 It reads `.github/shapeup.json` from the nearest directory at or above the working directory,
 so it runs from anywhere in the repository (override the path with `SHAPEUP_CONFIG`).
@@ -216,7 +217,7 @@ The Action keeps this block at the top of each pitch body:
 
 | Input | Default | Use |
 | --- | --- | --- |
-| `project-token` | none | Reads the project. Without it the Action only warns. |
+| `project-token` | none | Reads the project; see [Tokens](#tokens). Without it the Action only warns. |
 | `github-token` | `${{ github.token }}` | Commits the SVG and updates pitch bodies (`contents: write`, `issues: write`). |
 | `config` | `.github/shapeup.json` | Path of the config in the checked-out repository. |
 
@@ -256,20 +257,6 @@ Shaping, betting, the circuit breaker, dropping a scope, cooldown work, bug edit
   When the chart cannot be drawn, the step warns and still succeeds; run the hill chart workflow by hand with the pitch number.
 - The step logs no token, no API response and none of the Markdown inputs.
 
-### Tokens
-
-The config's `projectOwnerType` says whether a user or an organization owns the project; the step does not guess it from the token.
-
-- `project-token` changes the project. It also reads the repository's issues, since an issue's project fields are read from the issue.
-  For a user's project it is a classic token with `project` and `repo`.
-  For an organization's project it is a GitHub App installation token with `organization_projects: write` and `issues: read` on the repository,
-  or a personal access token that can do the same.
-  `bug new` does not need it.
-- `github-token` creates, closes and comments on issues, commits the chart and updates the pitch body, so it needs `issues: write` and `contents: write`.
-  The comments are posted as its owner: `github-actions[bot]` by default, or your App with the App's token.
-- When the automated work runs as the same App, give its job a token without `organization_projects`,
-  for instance with the `permission-*` inputs of `actions/create-github-app-token`; an installation token otherwise carries every permission of the App.
-
 ### Workflow
 
 - Name the command and the issue in the workflow, and take only the values from the work before it, through `with:`.
@@ -299,6 +286,49 @@ The config's `projectOwnerType` says whether a user or an organization owns the 
 | --- | --- |
 | `result` | `changed`, or `unchanged` when the result already held |
 | `number` | The issue the command changed, or the one `scope new` or `bug new` created |
+
+## Tokens
+
+A workflow's own `github.token` cannot reach a GitHub Project, so both Actions take a `project-token` for it.
+Which one depends on who owns the project, as `projectOwnerType` in the config says; the Actions never guess it from the token.
+
+| Project owner | Set in the repository or the organization | `project-token` |
+| --- | --- | --- |
+| A user | Secret `SHAPEUP_PROJECT_TOKEN`: a classic token of the owner | `${{ secrets.SHAPEUP_PROJECT_TOKEN }}` |
+| An organization | Variable `SHAPEUP_APP_CLIENT_ID` and secret `SHAPEUP_APP_PRIVATE_KEY`: a GitHub App's Client ID and private key | `${{ steps.app.outputs.token }}`, minted in the same job |
+
+- **A user's project** takes a classic token of its owner, since a GitHub App cannot reach a project that a user owns.
+  It needs `project` for the board Action, which changes the project; `read:project` is enough for the hill chart Action alone. `repo` reads the repository's issues.
+  The token acts as its owner and expires when its owner set it to; replace the secret before then.
+- **An organization's project** takes a token of a GitHub App that the organization installed with access to the repository.
+  The App needs the organization permission Projects, read and write for the board Action or read-only for the hill chart Action alone,
+  and the repository permission Issues, read-only.
+  Its Client ID is not a secret and goes in a variable; its private key goes in a secret. Set both at the organization's level to share them.
+  Each job mints a token for an hour with `actions/create-github-app-token`, narrowed to those permissions, so the Actions never see the key:
+
+  ```yaml
+  - id: app
+    if: vars.SHAPEUP_APP_CLIENT_ID != ''
+    uses: actions/create-github-app-token@v3
+    with:
+      client-id: ${{ vars.SHAPEUP_APP_CLIENT_ID }}
+      private-key: ${{ secrets.SHAPEUP_APP_PRIVATE_KEY }}
+      permission-organization-projects: write
+      permission-issues: read
+  - uses: vulpes-facility/gh-shapeup/board@v1
+    with:
+      project-token: ${{ steps.app.outputs.token || secrets.SHAPEUP_PROJECT_TOKEN }}
+  ```
+
+  The example workflows do this, so they serve both owners: the App's token when the variable is set, and the secret otherwise.
+- The project token also reads the repository's issues, since an issue's project fields are read from the issue.
+  `bug new` does not use it.
+- `github-token` needs no setting.
+  The workflow's own `github.token`, with `contents: write` and `issues: write`, commits the chart and updates pitch bodies,
+  and for the board Action creates, closes and comments on issues, as `github-actions[bot]`.
+  To comment as your App, pass the App's token instead, minted with Issues and Contents write as well.
+- When automated work runs as the same App, give its job a token without Projects, with the `permission-*` inputs of `actions/create-github-app-token`:
+  an installation token otherwise carries every permission of the App.
 
 ## Claude Code plugin
 

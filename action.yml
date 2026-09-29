@@ -6,7 +6,7 @@ branding:
   color: green
 inputs:
   project-token:
-    description: A token that can read the GitHub Project (a classic PAT with read:project and repo for a user-owned project). Without it the Action only warns.
+    description: A token that can read the GitHub Project and the repository's issues - a classic token of the owner for a user's project, or a GitHub App's token for an organization's. Without it the Action only warns.
     required: false
     default: ''
   github-token:
