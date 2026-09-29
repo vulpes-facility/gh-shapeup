@@ -1,0 +1,89 @@
+name: shapeup-board
+
+# A station does its work without the project token, and the board job after it changes the board from the station's outputs.
+# The station here is a stand-in: put your own work, such as an agent run, in its place.
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: Scope number
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  station:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      position: ${{ steps.work.outputs.position }}
+      reason: ${{ steps.work.outputs.reason }}
+      bug-title: ${{ steps.work.outputs.bug-title }}
+      bug-body: ${{ steps.work.outputs.bug-body }}
+    steps:
+      - id: work
+        run: |
+          cat > reason.md <<'MD'
+          The data model is settled, so what is left is known work.
+          MD
+          # A multi-line output ends at a delimiter the work cannot guess, so its text cannot end the value early and set another output.
+          delimiter="EOF-$(openssl rand -hex 16)"
+          {
+            echo 'position=60'
+            echo "reason<<$delimiter"
+            cat reason.md
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+
+  board:
+    needs: station
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Only this job gets the project token.
+    # It shares no concurrency group with shapeup-hill: a pending job is cancelled when another joins its group,
+    # and a cancelled board job loses its change.
+    permissions:
+      contents: write
+      issues: write
+    outputs:
+      result: ${{ steps.hill.outputs.result }}
+    steps:
+      # The config and the templates come from the default branch, never from a branch the station wrote.
+      # Keep the paths in step with templateDir and reports in the config.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: |
+            .github/shapeup.json
+            .github/shapeup/
+            .github/ISSUE_TEMPLATE/
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      # For an organization's project, a GitHub App's installation token can take the place of the secret:
+      # - id: app
+      #   uses: actions/create-github-app-token@v3
+      #   with:
+      #     client-id: ${{ vars.SHAPEUP_APP_CLIENT_ID }}
+      #     private-key: ${{ secrets.SHAPEUP_APP_PRIVATE_KEY }}
+      #     permission-organization-projects: write
+      #     permission-issues: read
+      # and then project-token: ${{ steps.app.outputs.token }} below.
+      # The workflow names the command and the issue; only the values come from the station, and only through with.
+      - id: hill
+        uses: vulpes33/gh-shapeup/board@v1
+        with:
+          command: scope hill
+          number: ${{ inputs.scope }}
+          position: ${{ needs.station.outputs.position }}
+          reason: ${{ needs.station.outputs.reason }}
+          project-token: ${{ secrets.SHAPEUP_PROJECT_TOKEN }}
+      # A bug the station found outside its scope goes to the backlog. bug new needs no project token.
+      - if: needs.station.outputs.bug-title != ''
+        uses: vulpes33/gh-shapeup/board@v1
+        with:
+          command: bug new
+          title: ${{ needs.station.outputs.bug-title }}
+          body: ${{ needs.station.outputs.bug-body }}

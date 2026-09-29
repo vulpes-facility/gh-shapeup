@@ -4,79 +4,12 @@ import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Cli, credentials, findRoot, main, parseArgs, reportTemplateReader } from '../src/cli.mjs';
+import { credentials, findRoot, main, parseArgs, reportTemplateReader } from '../src/cli.mjs';
 import { audit } from '../src/audit.mjs';
-import { parseConfig } from '../src/config.mjs';
 import { ShapeUpError } from '../src/domain.mjs';
+import { config, cycle, fixture, reports } from './cli-fixture.mjs';
 
-const config = parseConfig(readFileSync('examples/shapeup.json', 'utf8'));
 const s = config.statuses;
-const reports = {
-  pitch: '## Outcome\n\nPlayers can pay.\n\n## Scopes\n\n- #11 merged\n- #12 merged\n\n## Accepted limits\n\nNo refunds yet.\n\n## Follow-ups\n\nNone.\n',
-  scope: '## Outcome\n\nMerged.\n\n## Evidence\n\n- Pull request #5, tests pass.\n\n## Follow-ups\n\nNone.\n',
-};
-const cycle = { title: 'Cycle 2', id: 'c2' };
-
-function fixture() {
-  const calls = [];
-  const issues = new Map();
-  const files = new Map();
-  const templates = new Map();
-  const reads = [];
-  const failing = new Set();
-  let next = 30;
-  const boardIssue = (number, labels, item, extra = {}) => issues.set(number, { number, title: `T${number}`, body: '',
-    state: 'open', stateReason: null, labels, parent: null, item, ...extra });
-  boardIssue(10, ['pitch'], { id: 'I10', status: s.bet, appetite: '1 cycle', cycle, hill: null });
-  boardIssue(11, ['scope'], { id: 'I11', status: s.bet, cycle, hill: 30 }, { parent: 10 });
-  boardIssue(12, ['scope'], { id: 'I12', status: s.doing, cycle, hill: null }, { parent: 10 });
-  boardIssue(20, ['cooldown'], null);
-  boardIssue(21, ['bug'], null);
-  const api = {
-    async rest(path, options = {}) {
-      if (failing.has(`${options.method ?? 'GET'} ${path}`)) throw new ShapeUpError('api', 'GitHub API request failed (HTTP 500).');
-      calls.push(['rest', options.method ?? 'GET', path, options.body]);
-      const closing = issues.get(Number(path.split('/')[2]));
-      if (options.method === 'PATCH' && options.body?.state === 'closed' && closing) Object.assign(closing, { state: 'closed', stateReason: options.body.state_reason });
-      if (path === '/issues' && options.method === 'POST') { const number = next++; return { number, id: number * 10, node_id: `N${number}`, html_url: `https://x/${number}` }; }
-      return {};
-    },
-    async children(number) { return [...issues.values()].filter(i => i.parent === number).map(i => ({ number: i.number, labels: i.labels.map(name => ({ name })) })); },
-  };
-  // Board changes are recorded, applied to the issues and can be made to fail, as in failing.add('cycle I11').
-  const change = (kind, item, value, apply) => {
-    if (failing.has(`${kind} ${item}`)) throw new ShapeUpError('graphql', 'A GitHub Project GraphQL request failed.');
-    calls.push([kind, item, value]);
-    const issue = [...issues.values()].find(i => i.item?.id === item);
-    if (issue) apply(issue.item);
-  };
-  const board = {
-    async load() { calls.push(['load']); },
-    async issue(number) { const issue = issues.get(number); if (!issue) throw new Error(`no ${number}`); return structuredClone(issue); },
-    async add(node) { change('add', node, undefined, () => {}); calls.at(-1).pop(); return `item-${node}`; },
-    async setStatus(item, key) { change('status', item, key, i => { i.status = s[key]; }); },
-    async setAppetite(item, value) { change('appetite', item, value, i => { i.appetite = config.appetites[value]; }); },
-    async setCycle(item, id) { change('cycle', item, id, i => { i.cycle = { ...cycle, id }; }); },
-    async setHill(item, value) { change('hill', item, value, i => { i.hill = value; }); },
-    async clear(item, field) { change('clear', item, field, i => { i[field] = null; }); },
-    iteration(title) { if (title !== 'Cycle 2') throw new Error('bad cycle'); return 'c2'; },
-    option(field, name) {
-      if (![...Object.values(s), ...Object.values(config.appetites)].includes(name)) throw new ShapeUpError('field', `The field has no option named "${name}".`);
-      return name;
-    },
-    async issuesWith() { return [...issues.values()]; },
-  };
-  const out = [];
-  const cli = new Cli({ api, board, config,
-    readTemplate: name => { reads.push(['template', name]); return readFileSync(`examples/ISSUE_TEMPLATE/${name}`, 'utf8'); },
-    readReportTemplate: async path => {
-      reads.push(['report', path]);
-      if (!templates.has(path)) throw Object.assign(new Error(`ENOENT ${path}`), { code: 'ENOENT' });
-      return templates.get(path);
-    },
-    readText: async path => { if (!files.has(path)) throw new Error(`ENOENT ${path}`); return files.get(path); }, out: line => out.push(line) });
-  return { cli, board, calls, issues, files, templates, reads, failing, out, run: argv => cli.run(parseArgs(argv)) };
-}
 
 test('arguments: kind, action, number, repeated footnotes, missing values', () => {
   assert.deepEqual(parseArgs(['scope', 'hill', '11', '--position', '45', '--reason', 'why', '--footnote', 'a=1', '--footnote', 'b=2']),
@@ -339,6 +272,27 @@ test('main reads report templates under the repository root, never from the issu
   await mkdir(join(github, 'shapeup', 'scope-report.md'));
   await assert.rejects(run(), { code: 'template', message: 'Cannot read the report template .github/shapeup/scope-report.md.' });
 });
+test('main uses SHAPEUP_PROJECT_TOKEN for the project when it is set, and the one token for everything otherwise', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'shapeup-'));
+  await mkdir(join(root, '.github', 'ISSUE_TEMPLATE'), { recursive: true });
+  await writeFile(join(root, '.github', 'shapeup.json'), JSON.stringify({ projectOwner: 'octocat', projectOwnerType: 'user', projectNumber: 1 }));
+  await writeFile(join(root, '.github', 'ISSUE_TEMPLATE', 'bug.md'), readFileSync('examples/ISSUE_TEMPLATE/bug.md', 'utf8'));
+  const seen = [];
+  const original = globalThis.fetch;
+  // Every request fails, so each command stops at its first call: the project for scope start, an issue for bug new.
+  globalThis.fetch = async (url, options) => { seen.push([new URL(url).pathname, options.headers.Authorization]); return new Response('{}', { status: 500 }); };
+  try {
+    for (const [env, project] of [[{ SHAPEUP_PROJECT_TOKEN: 'project-token' }, 'project-token'], [{ SHAPEUP_PROJECT_TOKEN: '' }, 'gh-token'], [{}, 'gh-token']]) {
+      seen.length = 0;
+      const run = argv => main(argv, { GH_TOKEN: 'gh-token', SHAPEUP_REPOSITORY: 'o/r', ...env }, root);
+      await assert.rejects(run(['scope', 'start', '11', '--reason', 'x']), { code: 'api' });
+      await assert.rejects(run(['bug', 'new', '--title', 'T', '--symptom', 's', '--steps', '1', '--expected', 'e']), { code: 'api' });
+      assert.deepEqual(seen, [['/graphql', `Bearer ${project}`], ['/repos/o/r/issues', 'Bearer gh-token']], JSON.stringify(env));
+    }
+  } finally {
+    globalThis.fetch = original;
+  }
+});
 test('report templates are read from their own path next to the config, never from the issue templates', async () => {
   for (const [[argv, , prepare], path] of [[finishes[0], '.github/shapeup/pitch-report.md'], [finishes[1], '.github/shapeup/scope-report.md']]) {
     const f = fixture();
@@ -437,7 +391,8 @@ test('a state command whose result already holds, or that would reopen a finishe
     const f = fixture();
     prepare(f);
     const args = argv(f);
-    await assert.rejects(f.run(args), { code: 'input', message }, args.join(' '));
+    // A result that already holds has its own code; every other refusal is an input error.
+    await assert.rejects(f.run(args), { code: / already /.test(message) ? 'holds' : 'input', message }, args.join(' '));
     assert.deepEqual(f.calls.filter(c => c[0] !== 'load'), [], args.join(' '));
   }
 });
@@ -507,7 +462,7 @@ test('a command that fails after its first change reports what was made and what
     assert.equal(comments(f).length, 1, name);
     assert.ok(finished(f), name);
     // A state command then refuses, since its result holds; an edit of the body is not a state and runs again.
-    if (!name.startsWith('pitch edit')) await assert.rejects(f.run(argv(f)), { code: 'input' }, `${name} a third time`);
+    if (!name.startsWith('pitch edit')) await assert.rejects(f.run(argv(f)), { code: 'holds' }, `${name} a third time`);
   }
 });
 test('a change that failed in the CLI but landed on GitHub leaves the report to be posted by hand', async () => {
@@ -518,7 +473,7 @@ test('a change that failed in the CLI but landed on GitHub leaves the report to 
   await assert.rejects(f.run(argv), { code: 'partial', message: partial('scope done #11', ['close #11 as completed'],
     'set Status of #11 to Done: Could not reach the GitHub API. Run it again.', [], 'report') });
   f.board.setStatus = setStatus;
-  await assert.rejects(f.run(argv), { code: 'input', message: '#11 is already done: closed as completed and Done.' });
+  await assert.rejects(f.run(argv), { code: 'holds', message: '#11 is already done: closed as completed and Done.' });
   assert.deepEqual(comments(f), []);
 });
 test('pitch new and scope new that fail after creating the issue say what is left to do by hand', async () => {

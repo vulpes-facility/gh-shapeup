@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import { audit } from './audit.mjs';
 import { Board } from './board.mjs';
 import { defaultConfigPath, loadConfig } from './config.mjs';
-import { ShapeUpError, requirePosition } from './domain.mjs';
+import { ShapeUpError, parsePosition } from './domain.mjs';
 import { GitHub } from './github.mjs';
 import { Init } from './init.mjs';
 import { checkReport, composeBody, editBody, footnoteValues, loadReport, loadTemplate, sectionValues, titleFor } from './templates.mjs';
@@ -65,6 +65,8 @@ export function parseArgs(argv) {
 }
 
 const need = (value, message) => { if (value === null || value === undefined || value === '') throw new ShapeUpError('input', message); return value; };
+// A command whose result already holds refuses with its own code, so a caller can tell it from any other refusal.
+const holds = message => new ShapeUpError('holds', message);
 
 // Every command that changes an existing issue leaves a comment on it: a completion report when it finishes
 // a pitch or a scope, and the reason for the change otherwise.
@@ -180,7 +182,7 @@ export class Cli {
     const steps = [];
     if (issue.state === 'open') steps.push({ label: `close #${issue.number} as completed`, run: () => this.close(issue.number, 'completed') });
     if (issue.item.status !== s.done) steps.push({ label: `set ${c.statusField} of #${issue.number} to ${s.done}`, run: () => this.board.setStatus(issue.item.id, 'done') });
-    if (!steps.length) throw new ShapeUpError('input', `#${issue.number} is already done: closed as completed and ${s.done}.`);
+    if (!steps.length) throw holds(`#${issue.number} is already done: closed as completed and ${s.done}.`);
     this.requireStatus('done');
     return steps;
   }
@@ -308,7 +310,7 @@ export class Cli {
         const name = this.appetite(appetite);
         this.board.option('appetite', name);
         if (issue.item.appetite !== name) steps.push(step(set(issue.number, c.appetiteField, name), () => this.board.setAppetite(issue.item.id, appetite)));
-        else if (!patch) throw new ShapeUpError('input', `#${issue.number} already has ${c.appetiteField} ${name}.`);
+        else if (!patch) throw holds(`#${issue.number} already has ${c.appetiteField} ${name}.`);
       }
       await this.apply(`${kind} edit #${issue.number}`, steps, { note, again: 'it sends the same edit again, makes the changes still missing' });
       return changed(issue.number, `#${issue.number} updated`);
@@ -342,7 +344,7 @@ export class Cli {
         if (issue.item.cycle?.id !== iteration) steps.push(step(set(issue.number, c.cycleField, title), () => this.board.setCycle(issue.item.id, iteration)));
         if ([s.shaped, null].includes(issue.item.status)) steps.push(step(set(issue.number, c.statusField, s.bet), () => this.board.setStatus(issue.item.id, 'bet')));
       }
-      if (!steps.length) throw new ShapeUpError('input', `#${pitch.number} is already bet on ${title}.`);
+      if (!steps.length) throw holds(`#${pitch.number} is already bet on ${title}.`);
       await this.apply(`pitch bet #${pitch.number}`, steps, { note });
       return changed(pitch.number, `#${pitch.number} bet on ${title}`);
     }
@@ -357,7 +359,7 @@ export class Cli {
         if (issue.item.status !== s.shaped) steps.push(step(set(issue.number, c.statusField, s.shaped), () => this.board.setStatus(issue.item.id, 'shaped')));
         if (issue.item.cycle) steps.push(step(`clear ${c.cycleField} of #${issue.number}`, () => this.board.clear(issue.item.id, 'cycle')));
       }
-      if (!steps.length) throw new ShapeUpError('input', `#${pitch.number} and its scopes are already ${s.shaped} with no ${c.cycleField}.`);
+      if (!steps.length) throw holds(`#${pitch.number} and its scopes are already ${s.shaped} with no ${c.cycleField}.`);
       await this.apply(`pitch unbet #${pitch.number}`, steps, { note });
       return changed(pitch.number, `#${pitch.number} back to ${s.shaped}`);
     }
@@ -373,7 +375,7 @@ export class Cli {
         if (issue.state === 'open') steps.push(step(`close #${issue.number} as not planned`, () => this.close(issue.number, 'not_planned')));
         if (issue.item && issue.item.status !== s.dropped) steps.push(step(set(issue.number, c.statusField, s.dropped), () => this.board.setStatus(issue.item.id, 'dropped')));
       }
-      if (!steps.length) throw new ShapeUpError('input', `#${pitch.number} is already closed by the circuit breaker.`);
+      if (!steps.length) throw holds(`#${pitch.number} is already closed by the circuit breaker.`);
       await this.apply(`pitch break #${pitch.number}`, steps, { note });
       return changed(pitch.number, `#${pitch.number} closed by the circuit breaker`);
     }
@@ -407,21 +409,19 @@ export class Cli {
       const scope = await this.boardIssue(args.number, 'scope');
       const ending = this.ending(scope);
       if (ending) throw new ShapeUpError('input', `#${scope.number} is finished (${ending.how}) and is not started again. ${this.newScopeHint(scope)}`);
-      if (scope.item.status === s.doing) throw new ShapeUpError('input', `#${scope.number} is already ${s.doing}.`);
+      if (scope.item.status === s.doing) throw holds(`#${scope.number} is already ${s.doing}.`);
       this.requireStatus('doing');
       await this.apply(`scope start #${scope.number}`, [step(set(scope.number, c.statusField, s.doing), () => this.board.setStatus(scope.item.id, 'doing'))], { note });
       return changed(scope.number, `#${scope.number} ${s.doing}`);
     }
     if (kind === 'scope' && action === 'hill') {
       const scope = await this.boardIssue(args.number, 'scope');
-      const raw = need(args.options.position, '--position is required.');
-      if (!/^[0-9]{1,3}$/.test(raw)) throw new ShapeUpError('position', 'Hill Position must be an integer from 0 to 100.');
-      const position = requirePosition(Number(raw));
+      const position = parsePosition(need(args.options.position, '--position is required.'));
       // A done scope may still be moved to the top of the hill, where it belongs; nothing else moves a finished scope.
       const ending = this.ending(scope);
       if (ending && !ending.done) throw new ShapeUpError('input', `#${scope.number} was dropped (${ending.how}), so its hill position stays. ${this.newScopeHint(scope)}`);
       if (ending && position !== 100) throw new ShapeUpError('input', `#${scope.number} is done (${ending.how}), so it moves only to 100 on the hill. ${this.newScopeHint(scope)}`);
-      if ((scope.item.hill ?? 0) === position) throw new ShapeUpError('input', `#${scope.number} is already at ${position} on the hill.`);
+      if ((scope.item.hill ?? 0) === position) throw holds(`#${scope.number} is already at ${position} on the hill.`);
       await this.apply(`scope hill #${scope.number}`, [step(set(scope.number, c.hillField, position), () => this.board.setHill(scope.item.id, position))], { note });
       // The reason comment is also the hill chart Action's trigger, so it must follow the field change.
       return changed(scope.number, `#${scope.number} hill ${scope.item.hill ?? 0} → ${position}`);
@@ -462,20 +462,21 @@ export async function credentials(env, run = runGh) {
   return { token, repository };
 }
 
-// A report template's path is relative to the repository root; templateDir holds only the issue templates.
+// Issue templates are read from templateDir. A report template's path is relative to the repository root;
+// templateDir holds only the issue templates.
+export const templateReader = (root, config) => name => readFile(resolve(root, config.templateDir, name), 'utf8');
 export const reportTemplateReader = root => path => readFile(resolve(root, path), 'utf8');
 
-// The token never comes from the command line.
+// The token never comes from the command line. SHAPEUP_PROJECT_TOKEN, when set, is the one for the project.
 export async function main(argv = process.argv.slice(2), env = process.env, cwd = process.cwd()) {
   const args = parseArgs(argv);
   if (!args.kind || args.kind === 'help') { console.log(usage); return 0; }
   const root = env.SHAPEUP_CONFIG ? cwd : await findRoot(cwd);
   const config = await loadConfig(env.SHAPEUP_CONFIG || join(root, defaultConfigPath));
   const { token, repository } = await credentials(env);
-  const api = new GitHub({ repository, repositoryToken: token, projectToken: token });
+  const api = new GitHub({ repository, repositoryToken: token, projectToken: env.SHAPEUP_PROJECT_TOKEN || token });
   const cli = new Cli({ api, board: new Board(api, config), config,
-    readTemplate: name => readFile(resolve(root, config.templateDir, name), 'utf8'),
-    readReportTemplate: reportTemplateReader(root) });
+    readTemplate: templateReader(root, config), readReportTemplate: reportTemplateReader(root) });
   const result = await cli.run(args);
   return Array.isArray(result) && result.length ? 1 : 0;
 }

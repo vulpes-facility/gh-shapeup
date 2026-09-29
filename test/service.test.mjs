@@ -152,6 +152,21 @@ test('renderer failure leaves the pitch body untouched', async () => {
   assert.equal(f.issues.get(10).body, template);
   assert.equal(f.writes.length, 0);
 });
+test('redraw aligns only the pitch it is given, by its number or by one of its scopes', async () => {
+  const f = fixture();
+  f.open.push(40);
+  assert.equal(await f.service.redraw(12, 'scope'), 'drawn #10');
+  assert.deepEqual(f.writes.map(write => Object.keys(write.files)), [['hills/pitch-10.svg']]);
+  assert.deepEqual([...drawnValues(f.issues.get(10).body)], [[11, 20], [12, 0]]);
+  assert.equal(await f.service.redraw(10, 'pitch'), 'unchanged');
+  f.values.set(11, 55);
+  assert.equal(await f.service.redraw(10, 'pitch'), 'drawn #10');
+  assert.equal(f.issues.get(40).body, '');
+  assert.equal(await f.service.redraw(41, 'scope'), 'drawn #40');
+  f.issues.set(30, issue(30, 'scope'));
+  assert.equal(await f.service.redraw(30, 'scope'), 'no-pitch');
+  await assert.rejects(f.service.redraw(11, 'pitch'), { code: 'type' });
+});
 test('manual rebuild draws open pitches that have scopes, or one given pitch', async () => {
   const f = fixture();
   assert.equal(await f.service.rebuild(''), 1);

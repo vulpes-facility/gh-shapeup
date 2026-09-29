@@ -1,7 +1,7 @@
 {
   "name": "gh-shapeup",
   "version": "1.4.0",
-  "description": "Run Shape Up on GitHub Issues and Projects: a CLI for pitches, scopes, cooldowns and bugs, and an Action that draws each pitch's hill chart.",
+  "description": "Run Shape Up on GitHub Issues and Projects: a CLI for pitches, scopes, cooldowns and bugs, an Action that draws each pitch's hill chart, and an Action that runs the cycle's commands on the board.",
   "license": "MIT",
   "type": "module",
   "bin": {
@@ -11,6 +11,7 @@
     "bin/",
     "src/",
     "action.yml",
+    "board/",
     "config.schema.json"
   ],
   "engines": {

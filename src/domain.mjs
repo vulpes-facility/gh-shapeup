@@ -20,6 +20,12 @@ export function requirePosition(value) {
   return value;
 }
 
+// A position given as text, on the command line or as an Action input.
+export function parsePosition(text) {
+  if (!/^[0-9]{1,3}$/.test(text)) throw new ShapeUpError('position', 'Hill Position must be an integer from 0 to 100.');
+  return requirePosition(Number(text));
+}
+
 // An empty Hill Position counts as 0, both when drawing and when comparing.
 export const positionOf = value => requirePosition(value ?? 0);
 
