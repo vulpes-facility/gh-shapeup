@@ -9,7 +9,7 @@ import { GeneratedStore } from './store.mjs';
 
 // The commands a cycle runs from a workflow: the inputs each needs, the ones it also takes (at least one of them),
 // and the chart it aligns, named by the pitch input or by the scope in number.
-// Shaping, betting, the circuit breaker, cooldown work, bug edits and init stay with people on the CLI.
+// Shaping, betting, the circuit breaker, dropping a scope, cooldown work, bug edits and init stay with people on the CLI.
 export const commands = {
   'scope new': { needs: ['pitch', 'title', 'body'], chart: 'pitch' },
   'scope edit': { needs: ['number', 'reason'], takes: ['title', 'body'] },
