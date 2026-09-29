@@ -8,8 +8,9 @@ Run [Shape Up](https://basecamp.com/shapeup) on GitHub Issues and Projects.
   It installs as the gh extension `gh shapeup`.
 - A **hill chart Action** that draws each pitch's hill chart as an SVG and keeps it at the top of the pitch body.
 - A **board Action** that runs the cycle's commands from a workflow, such as after an agent's work, with the CLI's checks and refusals.
+- A **Claude Code plugin** that runs the CLI for you when you ask Claude.
 
-All three read one config file that names your project, its fields and your templates.
+The CLI and both Actions read one config file that names your project, its fields and your templates.
 The config holds names only: issues, statuses, cycles and hill positions are always read live from GitHub.
 
 ## How Shape Up maps onto GitHub
@@ -48,6 +49,8 @@ Every field, option and label name above is a default and can be renamed in the 
 7. **CLI.** Run `gh extension install vulpes-facility/gh-shapeup`.
    It is one binary for macOS, Linux or Windows that needs nothing but `gh`, and it uses your `gh` login.
    `gh extension upgrade shapeup` updates it.
+8. **Claude Code plugin** (optional). Run `claude plugin marketplace add vulpes-facility/claude-plugins`
+   and `claude plugin install gh-shapeup@vulpes-facility`; see [Claude Code plugin](#claude-code-plugin).
 
 ## CLI
 
@@ -296,6 +299,15 @@ The config's `projectOwnerType` says whether a user or an organization owns the 
 | --- | --- |
 | `result` | `changed`, or `unchanged` when the result already held |
 | `number` | The issue the command changed, or the one `scope new` or `bug new` created |
+
+## Claude Code plugin
+
+The plugin in [`plugins/gh-shapeup`](plugins/gh-shapeup) gives Claude Code a skill that turns a request,
+such as "bet #10 on Cycle 2" or "scope #11 is over the hill", into the `gh shapeup` command that makes it.
+It asks for a reason when you gave none, writes sections and completion reports to files that follow your templates,
+asks before `pitch break`, `scope drop` and `init --force`, and runs `audit` at the end.
+It comes from the [vulpes-facility marketplace](https://github.com/vulpes-facility/claude-plugins), at the CLI's version,
+and the tests check that it names every command the CLI takes and no other.
 
 ## Development
 
