@@ -45,7 +45,7 @@ Every field, option and label name above is a default and can be renamed in the 
    The [board Action](#board-action) changes the project, so its token needs more; see [Tokens](#tokens).
 6. **Workflow.** Copy [`examples/workflows/shapeup-hill.yml`](examples/workflows/shapeup-hill.yml) to `.github/workflows/`.
    To change the board from a workflow, start from [`examples/workflows/shapeup-board.yml`](examples/workflows/shapeup-board.yml).
-7. **CLI.** Run `gh extension install vulpes33/gh-shapeup`.
+7. **CLI.** Run `gh extension install vulpes-facility/gh-shapeup`.
    It is one binary for macOS, Linux or Windows that needs nothing but `gh`, and it uses your `gh` login.
    `gh extension upgrade shapeup` updates it.
 
@@ -219,7 +219,7 @@ The Action keeps this block at the top of each pitch body:
 
 ## Board Action
 
-`vulpes33/gh-shapeup/board@v1` runs one command of the cycle from a workflow, with the same checks and refusals as the CLI.
+`vulpes-facility/gh-shapeup/board@v1` runs one command of the cycle from a workflow, with the same checks and refusals as the CLI.
 It is meant for a job that runs after automated work, such as an agent's:
 that work never sees the project token, and hands over only values that the workflow passes in as inputs.
 See [`examples/workflows/shapeup-board.yml`](examples/workflows/shapeup-board.yml).

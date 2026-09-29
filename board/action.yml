@@ -1,6 +1,6 @@
 name: gh-shapeup board
 description: Runs one command of the cycle on the board with the CLI's checks and refusals, and redraws the hill chart it changes.
-author: vulpes33
+author: vulpes-facility
 inputs:
   command:
     description: 'One of: scope new, scope edit, scope start, scope hill, scope done, pitch done, bug new.'
