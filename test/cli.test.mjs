@@ -437,7 +437,8 @@ test('a state command whose result already holds, or that would reopen a finishe
     const f = fixture();
     prepare(f);
     const args = argv(f);
-    await assert.rejects(f.run(args), { code: 'input', message }, args.join(' '));
+    // A result that already holds has its own code; every other refusal is an input error.
+    await assert.rejects(f.run(args), { code: / already /.test(message) ? 'holds' : 'input', message }, args.join(' '));
     assert.deepEqual(f.calls.filter(c => c[0] !== 'load'), [], args.join(' '));
   }
 });
@@ -507,7 +508,7 @@ test('a command that fails after its first change reports what was made and what
     assert.equal(comments(f).length, 1, name);
     assert.ok(finished(f), name);
     // A state command then refuses, since its result holds; an edit of the body is not a state and runs again.
-    if (!name.startsWith('pitch edit')) await assert.rejects(f.run(argv(f)), { code: 'input' }, `${name} a third time`);
+    if (!name.startsWith('pitch edit')) await assert.rejects(f.run(argv(f)), { code: 'holds' }, `${name} a third time`);
   }
 });
 test('a change that failed in the CLI but landed on GitHub leaves the report to be posted by hand', async () => {
@@ -518,7 +519,7 @@ test('a change that failed in the CLI but landed on GitHub leaves the report to 
   await assert.rejects(f.run(argv), { code: 'partial', message: partial('scope done #11', ['close #11 as completed'],
     'set Status of #11 to Done: Could not reach the GitHub API. Run it again.', [], 'report') });
   f.board.setStatus = setStatus;
-  await assert.rejects(f.run(argv), { code: 'input', message: '#11 is already done: closed as completed and Done.' });
+  await assert.rejects(f.run(argv), { code: 'holds', message: '#11 is already done: closed as completed and Done.' });
   assert.deepEqual(comments(f), []);
 });
 test('pitch new and scope new that fail after creating the issue say what is left to do by hand', async () => {
