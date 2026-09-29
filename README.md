@@ -50,7 +50,7 @@ Every field, option and label name above is a default and can be renamed in the 
    It is one binary for macOS, Linux or Windows that needs nothing but `gh`, and it uses your `gh` login.
    `gh extension upgrade shapeup` updates it.
 8. **Claude Code plugin** (optional). Run `claude plugin marketplace add vulpes-facility/claude-plugins`
-   and `claude plugin install gh-shapeup@vulpes-facility`; see [Claude Code plugin](#claude-code-plugin).
+   and `claude plugin install gh-shapeup@vulpes`; see [Claude Code plugin](#claude-code-plugin).
 
 ## CLI
 
@@ -336,7 +336,7 @@ The plugin in [`plugins/gh-shapeup`](plugins/gh-shapeup) gives Claude Code a ski
 such as "bet #10 on Cycle 2" or "scope #11 is over the hill", into the `gh shapeup` command that makes it.
 It asks for a reason when you gave none, writes sections and completion reports to files that follow your templates,
 asks before `pitch break`, `scope drop` and `init --force`, and runs `audit` at the end.
-It comes from the [vulpes-facility marketplace](https://github.com/vulpes-facility/claude-plugins), at the CLI's version,
+It comes from the [`vulpes` marketplace](https://github.com/vulpes-facility/claude-plugins), at the CLI's version,
 and the tests check that it names every command the CLI takes and no other.
 
 ## Development
