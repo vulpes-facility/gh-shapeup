@@ -23,6 +23,7 @@ The config holds names only: issues, statuses, cycles and hill positions are alw
 | Cycle | An iteration field **Cycle** |
 | Hill position | A Number field **Hill Position** (0–100) on each scope; empty counts as 0 |
 | Circuit breaker | `gh shapeup pitch break`: closes the pitch and its open scopes as not planned |
+| Scope hammering | `gh shapeup scope drop`: closes a scope the pitch can ship without as not planned |
 | Cooldown work, bugs | Issues with the `cooldown` and `bug` labels, created from their templates |
 
 Every field, option and label name above is a default and can be renamed in the config.
@@ -62,6 +63,7 @@ gh shapeup scope edit <number> [--title T] [--done …] --reason …
 gh shapeup scope start <number> --reason …
 gh shapeup scope hill <number> --position 0-100 --reason …
 gh shapeup scope done <number> --report-file <file>
+gh shapeup scope drop <number> --reason …
 gh shapeup cooldown new --title T --what … [--why …] --done …
 gh shapeup cooldown edit <number> [--title T] [section parameters] --reason …
 gh shapeup bug new --title T --symptom … --steps … --expected … [--environment …]
@@ -106,6 +108,8 @@ A done scope that did not reach the top of the hill may still be moved to 100.
 A scope is worked on only while its pitch is bet: `scope start` and `scope hill` refuse a scope without a pitch,
 and one whose pitch is finished or is neither Bet nor In progress.
 A pitch that is Bet goes In progress when the first of its scopes starts.
+A scope the pitch can ship without is cut with `scope drop`, whatever the pitch's status: it is closed as not planned and set Dropped,
+keeps its hill position and cycle, and leaves the chart, so `pitch done` no longer waits for it.
 
 | Command | Refuses when |
 | --- | --- |
@@ -116,6 +120,7 @@ A pitch that is Bet goes In progress when the first of its scopes starts.
 | `scope start` | the scope is finished; it has no pitch, or its pitch is finished or neither Bet nor In progress; or the scope and its pitch are both already In progress |
 | `scope hill` | the scope was dropped, or is done and the position is not 100; it has no pitch, or its pitch is finished or neither Bet nor In progress; or the scope is already at the position (empty counts as 0) |
 | `scope done` | the scope was dropped, or is already closed as completed and Done |
+| `scope drop` | the scope is done, or is already closed as anything but completed and Dropped |
 | `scope new` | the pitch is finished |
 | `pitch edit --appetite` | the pitch is not Shaped, or the appetite is the only change and the pitch already has it |
 
@@ -229,7 +234,7 @@ See [`examples/workflows/shapeup-board.yml`](examples/workflows/shapeup-board.ym
 | `pitch done` | `number`, `report` | |
 | `bug new` | `title`, `body` | |
 
-Shaping, betting, the circuit breaker, cooldown work, bug edits and `init` are left to people on the CLI.
+Shaping, betting, the circuit breaker, dropping a scope, cooldown work, bug edits and `init` are left to people on the CLI.
 
 - `body` is Markdown split into `## ` sections, as with `--from`: its headings name the kind's sections in the config, and anything else in it is left out.
   `reason` is Markdown posted as it is, as with `--reason-file`, and `report` is a [completion report](#completion-reports), as with `--report-file`.

@@ -23,6 +23,7 @@ export const usage = `Usage: gh shapeup <kind> <command> [number] [--parameter v
   scope start <number> --reason …
   scope hill <number> --position 0-100 --reason …
   scope done <number> --report-file <file>
+  scope drop <number> --reason …
   cooldown new --title T --what … [--why …] --done …
   cooldown edit <number> [--title T] [section parameters] --reason …
   bug new --title T --symptom … --steps … --expected … [--environment …]
@@ -72,7 +73,7 @@ const holds = message => new ShapeUpError('holds', message);
 // a pitch or a scope, and the reason for the change otherwise.
 const needsReport = (kind, action) => action === 'done' && (kind === 'pitch' || kind === 'scope');
 const needsReason = (kind, action) => action === 'edit' ||
-  ({ pitch: ['bet', 'unbet', 'break'], scope: ['start', 'hill'] })[kind]?.includes(action) === true;
+  ({ pitch: ['bet', 'unbet', 'break'], scope: ['start', 'hill', 'drop'] })[kind]?.includes(action) === true;
 
 export class Cli {
   constructor({ api, board, config, readTemplate, readReportTemplate, readText = path => readFile(path, 'utf8'), out = console.log }) {
@@ -105,7 +106,7 @@ export class Cli {
     if (action === 'new') return [...body, ...({ pitch: ['appetite'], scope: ['pitch'] }[kind] ?? [])];
     if (action === 'edit') return [...body, ...(kind === 'pitch' ? ['appetite'] : []), ...reason];
     return { 'pitch bet': ['cycle', ...reason], 'pitch unbet': reason, 'pitch break': reason, 'pitch done': ['report-file'],
-      'scope start': reason, 'scope hill': ['position', ...reason], 'scope done': ['report-file'] }[`${kind} ${action}`];
+      'scope start': reason, 'scope hill': ['position', ...reason], 'scope done': ['report-file'], 'scope drop': reason }[`${kind} ${action}`];
   }
   refuseUnread(args, reads) {
     const given = [...Object.keys(args.options), ...(args.footnotes.length ? ['footnote'] : [])];
@@ -397,7 +398,7 @@ export class Cli {
       const pitch = await this.boardIssue(args.number, 'pitch');
       const steps = this.finishing(pitch, 'pitch');
       const open = (await this.children(pitch)).filter(scope => scope.state === 'open').map(scope => `#${scope.number}`);
-      if (open.length) throw new ShapeUpError('input', `Scopes are still open: ${open.join(', ')}`);
+      if (open.length) throw new ShapeUpError('input', `Scopes are still open: ${open.join(', ')}. Finish each with scope done, or cut it with scope drop.`);
       await this.apply(`pitch done #${pitch.number}`, steps, { note });
       return changed(pitch.number, `#${pitch.number} done`);
     }
@@ -450,6 +451,21 @@ export class Cli {
       const scope = await this.boardIssue(args.number, 'scope');
       await this.apply(`scope done #${scope.number}`, this.finishing(scope, 'scope'), { note });
       return changed(scope.number, `#${scope.number} done`);
+    }
+    // Cutting a scope the pitch can ship without, as the circuit breaker drops a scope: closed as not planned and Dropped,
+    // with its hill position and cycle kept. It leaves the chart, and a pitch whose other scopes are done can then be done.
+    // The pitch's status does not matter, since cutting is a decision about the work, not work on it.
+    if (kind === 'scope' && action === 'drop') {
+      const scope = await this.boardIssue(args.number, 'scope');
+      const ending = this.ending(scope);
+      if (ending?.done) throw new ShapeUpError('input', `#${scope.number} is done (${ending.how}); a done scope is not dropped.`);
+      this.requireStatus('dropped');
+      const steps = [];
+      if (scope.state === 'open') steps.push(step(`close #${scope.number} as not planned`, () => this.close(scope.number, 'not_planned')));
+      if (scope.item.status !== s.dropped) steps.push(step(set(scope.number, c.statusField, s.dropped), () => this.board.setStatus(scope.item.id, 'dropped')));
+      if (!steps.length) throw holds(`#${scope.number} is already dropped: ${ending.how} and ${s.dropped}.`);
+      await this.apply(`scope drop #${scope.number}`, steps, { note });
+      return changed(scope.number, `#${scope.number} dropped`);
     }
     throw new ShapeUpError('input', usage);
   }

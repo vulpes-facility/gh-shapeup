@@ -137,6 +137,7 @@ const changes = [
   [['scope', 'edit', '11', '--done', 'Merged'], 11],
   [['scope', 'start', '11'], 11],
   [['scope', 'hill', '11', '--position', '45'], 11],
+  [['scope', 'drop', '11'], 11],
   [['cooldown', 'edit', '20', '--what', 'Tidy'], 20],
   [['bug', 'edit', '21', '--expected', 'It moves'], 21],
 ];
@@ -387,6 +388,10 @@ test('a state command whose result already holds, or that would reopen a finishe
     [status(10, s.done), () => ['scope', 'new', '--pitch', '10', '--title', 'T', '--done', 'd'], '#10 is finished (Done); a new scope needs a pitch that is not finished.'],
     [status(10, s.dropped), () => ['scope', 'new', '--pitch', '10', '--title', 'T', '--done', 'd'], '#10 is finished (Dropped); a new scope needs a pitch that is not finished.'],
     [closed(11, 'duplicate'), f => ['scope', 'done', '11', ...scopeReport(f)], `#11 was dropped (closed as duplicate); a dropped scope is not done. ${hint}`],
+    [closed(11, 'completed'), () => ['scope', 'drop', '11', '--reason', 'x'], '#11 is done (closed as completed); a done scope is not dropped.'],
+    [status(11, s.done), () => ['scope', 'drop', '11', '--reason', 'x'], '#11 is done (Done); a done scope is not dropped.'],
+    [closed(11, 'not_planned', s.dropped), () => ['scope', 'drop', '11', '--reason', 'x'], '#11 is already dropped: closed as not planned and Dropped.'],
+    [closed(11, 'duplicate', s.dropped), () => ['scope', 'drop', '11', '--reason', 'x'], '#11 is already dropped: closed as duplicate and Dropped.'],
   ]) {
     const f = fixture();
     prepare(f);
@@ -464,6 +469,41 @@ test('scope start sets a pitch that is Bet In progress with it, and posts the re
   await h.run(['scope', 'hill', '11', '--position', '60', '--reason', 'Moving.']);
   assert.equal(h.issues.get(10).item.status, s.bet);
 });
+test('scope drop closes the scope as not planned and sets it Dropped, keeps its hill position and cycle, and lets the pitch be done', async () => {
+  const f = fixture();
+  await f.run(['scope', 'drop', '12', '--reason', 'The pitch ships without it.']);
+  assert.deepEqual(f.calls.filter(c => c[0] !== 'load'), [
+    ['rest', 'PATCH', '/issues/12', { state: 'closed', state_reason: 'not_planned' }],
+    ['status', 'I12', 'dropped'],
+    ['rest', 'POST', '/issues/12/comments', { body: 'The pitch ships without it.' }],
+  ]);
+  assert.equal(f.out.at(-1), '#12 dropped');
+  assert.deepEqual([f.issues.get(12).item.cycle, f.issues.get(12).item.hill], [cycle, null]);
+  assert.equal(f.issues.get(10).item.status, s.bet);
+  f.files.set('pitch.md', reports.pitch);
+  f.files.set('scope.md', reports.scope);
+  await assert.rejects(f.run(['pitch', 'done', '10', '--report-file', 'pitch.md']),
+    { code: 'input', message: 'Scopes are still open: #11. Finish each with scope done, or cut it with scope drop.' });
+  await f.run(['scope', 'done', '11', '--report-file', 'scope.md']);
+  await f.run(['pitch', 'done', '10', '--report-file', 'pitch.md']);
+  assert.equal(f.issues.get(10).item.status, s.done);
+  // Only what differs changes: an open scope that is Dropped is closed, and one closed as not planned is set Dropped.
+  const g = fixture();
+  g.issues.get(11).item.status = s.dropped;
+  await g.run(['scope', 'drop', '11', '--reason', 'x']);
+  assert.deepEqual(g.calls.filter(c => c[0] !== 'load').map(c => c.slice(0, 3)), [['rest', 'PATCH', '/issues/11'], ['rest', 'POST', '/issues/11/comments']]);
+  const h = fixture();
+  Object.assign(h.issues.get(11), { state: 'closed', stateReason: 'not_planned' });
+  await h.run(['scope', 'drop', '11', '--reason', 'x']);
+  assert.deepEqual(h.calls.filter(c => c[0] !== 'load').map(c => c.slice(0, 3)), [['status', 'I11', 'dropped'], ['rest', 'POST', '/issues/11/comments']]);
+  // The pitch's status does not matter.
+  for (const status of [s.shaped, s.done]) {
+    const k = fixture();
+    k.issues.get(10).item.status = status;
+    await k.run(['scope', 'drop', '11', '--reason', 'x']);
+    assert.equal(k.issues.get(11).item.status, s.dropped, status);
+  }
+});
 test('a finished scope keeps its state when its pitch is bet, unbet or broken, and only unfinished scopes follow', async () => {
   const f = fixture();
   finishedScope(f);
@@ -506,6 +546,9 @@ test('a command that fails after its first change reports what was made and what
     ['scope start', () => {}, 'status I10', () => ['scope', 'start', '11', '--reason', 'Started.'],
       partial('scope start #11', ['set Status of #11 to In progress'], `set Status of #10 to In progress: ${graphqlFailed}`, [], 'reason'),
       f => [10, 11].every(n => f.issues.get(n).item.status === s.doing)],
+    ['scope drop', () => {}, 'status I11', () => ['scope', 'drop', '11', '--reason', 'Cut.'],
+      partial('scope drop #11', ['close #11 as not planned'], `set Status of #11 to Dropped: ${graphqlFailed}`, [], 'reason'),
+      f => f.issues.get(11).state === 'closed' && f.issues.get(11).item.status === s.dropped],
     ['scope done', () => {}, 'status I11', f => ['scope', 'done', '11', ...scopeReport(f)],
       partial('scope done #11', ['close #11 as completed'], `set Status of #11 to Done: ${graphqlFailed}`, [], 'report'),
       f => f.issues.get(11).state === 'closed' && f.issues.get(11).item.status === s.done],

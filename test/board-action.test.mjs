@@ -32,7 +32,7 @@ test('the board Action takes only the commands a cycle runs from a workflow', ()
     assert.deepEqual([inputs.kind, inputs.action], command.split(' '), command);
   }
   for (const command of ['pitch new', 'pitch edit', 'pitch bet', 'pitch unbet', 'pitch break', 'cooldown new', 'cooldown edit',
-    'bug edit', 'audit', 'init', 'scope  hill', 'Scope hill', 'scope hill; exit 1', '']) {
+    'scope drop', 'bug edit', 'audit', 'init', 'scope  hill', 'Scope hill', 'scope hill; exit 1', '']) {
     assert.throws(() => read({ command, number: '11' }), { code: 'input',
       message: 'command must be one of: scope new, scope edit, scope start, scope hill, scope done, pitch done, bug new.' }, command);
   }
@@ -192,7 +192,7 @@ test('any other refusal fails the step before any change, and leaves the chart a
     [input('scope hill'), 'input', /^#11 was dropped \(Dropped\), so its hill position stays\./, f => { f.issues.get(11).item.status = s.dropped; }],
     [input('scope new', { body: '## Notes\n\nNo section the config names.\n' }), 'input', 'Missing sections: --done'],
     [input('scope done', { report: reports.scope.replace('## Evidence', '## Proof') }), 'input', /^The report has no "## Evidence" section\./],
-    [input('pitch done'), 'input', 'Scopes are still open: #11, #12'],
+    [input('pitch done'), 'input', 'Scopes are still open: #11, #12. Finish each with scope done, or cut it with scope drop.'],
   ]) {
     const b = board(values, prepare);
     await assert.rejects(b.run(), { code, message }, values.command);
