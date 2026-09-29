@@ -62,15 +62,16 @@ jobs:
             .github/ISSUE_TEMPLATE/
           sparse-checkout-cone-mode: false
           persist-credentials: false
-      # For an organization's project, a GitHub App's installation token can take the place of the secret:
-      # - id: app
-      #   uses: actions/create-github-app-token@v3
-      #   with:
-      #     client-id: ${{ vars.SHAPEUP_APP_CLIENT_ID }}
-      #     private-key: ${{ secrets.SHAPEUP_APP_PRIVATE_KEY }}
-      #     permission-organization-projects: write
-      #     permission-issues: read
-      # and then project-token: ${{ steps.app.outputs.token }} below.
+      # An organization's project: a GitHub App's token, minted for this job when the variable SHAPEUP_APP_CLIENT_ID is set.
+      - id: app
+        if: vars.SHAPEUP_APP_CLIENT_ID != ''
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.SHAPEUP_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SHAPEUP_APP_PRIVATE_KEY }}
+          permission-organization-projects: write
+          permission-issues: read
+      # A user's project takes the classic token of its owner in the secret SHAPEUP_PROJECT_TOKEN instead.
       # The workflow names the command and the issue; only the values come from the station, and only through with.
       - id: hill
         uses: vulpes-facility/gh-shapeup/board@v1
@@ -79,7 +80,7 @@ jobs:
           number: ${{ inputs.scope }}
           position: ${{ needs.station.outputs.position }}
           reason: ${{ needs.station.outputs.reason }}
-          project-token: ${{ secrets.SHAPEUP_PROJECT_TOKEN }}
+          project-token: ${{ steps.app.outputs.token || secrets.SHAPEUP_PROJECT_TOKEN }}
       # A bug the station found outside its scope goes to the backlog. bug new needs no project token.
       - if: needs.station.outputs.bug-title != ''
         uses: vulpes-facility/gh-shapeup/board@v1

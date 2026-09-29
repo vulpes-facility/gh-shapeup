@@ -39,6 +39,16 @@ jobs:
           sparse-checkout: .github/shapeup.json
           sparse-checkout-cone-mode: false
           persist-credentials: false
+      # An organization's project: a GitHub App's token, minted for this job when the variable SHAPEUP_APP_CLIENT_ID is set.
+      - id: app
+        if: vars.SHAPEUP_APP_CLIENT_ID != ''
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.SHAPEUP_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SHAPEUP_APP_PRIVATE_KEY }}
+          permission-organization-projects: read
+          permission-issues: read
+      # A user's project: the classic token of its owner in the secret SHAPEUP_PROJECT_TOKEN.
       - uses: vulpes-facility/gh-shapeup@v1
         with:
-          project-token: ${{ secrets.SHAPEUP_PROJECT_TOKEN }}
+          project-token: ${{ steps.app.outputs.token || secrets.SHAPEUP_PROJECT_TOKEN }}
